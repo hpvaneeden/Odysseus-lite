@@ -24,7 +24,7 @@ from src.llm_core import (
 )
 from src.agent_loop import stream_agent_loop
 from src import agent_runs
-from src.model_context import estimate_tokens
+from src.model_context import estimate_tokens, is_local_endpoint
 from src.context_compactor import (
     apply_compaction_state,
     maybe_compact,
@@ -70,6 +70,8 @@ from src.image_model_ids import looks_like_image_generation_model
 from src.tool_policy import (
     WEB_TOOL_NAMES,
     build_effective_tool_policy,
+    is_factual_lookup_request,
+    is_small_model_identifier,
     is_web_search_explicitly_denied,
     web_search_enabled_for_turn,
 )
@@ -805,6 +807,33 @@ def setup_chat_routes(
         if not (getattr(sess, "endpoint_url", "") or "").strip():
             raise HTTPException(400, "Selected model endpoint is not configured")
 
+        auto_search_grounding = False
+        _search_denied_in_message = bool(re.search(
+            r"\b(?:without (?:the )?internet|offline only|stay offline|no internet|no web|"
+            r"don't search|do not search|don't use (?:the )?(?:web|internet)|"
+            r"do not use (?:the )?(?:web|internet)|don't use external sources|"
+            r"no web search|don't browse|do not browse)\b",
+            message,
+            re.IGNORECASE,
+        ))
+        try:
+            from src.settings import get_setting
+            _disabled_tools_for_auto_search = set(get_setting("disabled_tools", []) or [])
+        except Exception:
+            _disabled_tools_for_auto_search = set()
+        if (
+            not chat_request.use_web
+            and "use_web" not in chat_request.model_fields_set
+            and is_factual_lookup_request(message)
+            and is_small_model_identifier(sess.model)
+            and is_local_endpoint(sess.endpoint_url)
+            and not _search_denied_in_message
+            and not ({"search", "web_search", "web_fetch"} & _disabled_tools_for_auto_search)
+        ):
+            use_web = True
+            auto_search_grounding = True
+            logger.info("automatic web grounding enabled for factual query on small local model")
+
         # Same allowed_models + daily-cap gate as chat_stream (mirror so the
         # non-streaming path can't be used to bypass).
         _enforce_chat_privileges(request, sess)
@@ -832,6 +861,8 @@ def setup_chat_routes(
             preset_id=preset_id,
             att_ids=att_ids,
             use_web=use_web,
+            auto_web_search=auto_search_grounding,
+            auto_web_search_query=message if auto_search_grounding else None,
             time_filter=time_filter,
             webhook_manager=webhook_manager,
             allow_tool_preprocessing=allow_tool_preprocessing,
@@ -993,7 +1024,9 @@ def setup_chat_routes(
         # JSON body as fallback so callers who send {"allow_bash": true}
         # actually get bash enabled.
         allow_bash = form_data.get("allow_bash") or (body or {}).get("allow_bash")
-        allow_web_search = form_data.get("allow_web_search") or (body or {}).get("allow_web_search")
+        allow_web_search = form_data.get("allow_web_search")
+        if allow_web_search is None and body is not None:
+            allow_web_search = body.get("allow_web_search")
         use_rag = form_data.get("use_rag")
         search_context = form_data.get("search_context")  # pre-fetched web search results (compare mode)
         compare_mode = str(form_data.get("compare_mode", "")).lower() == "true"
@@ -1033,6 +1066,7 @@ def setup_chat_routes(
         # not chats we quietly promoted for a notes/calendar intent.
         user_requested_agent = (chat_mode == "agent")
         _search_enabled = web_search_enabled_for_turn(allow_web_search, use_web)
+        auto_search_grounding = False
         _explicit_web_intent = False
         _explicit_browser_intent = False
         if isinstance(message, str):
@@ -1263,6 +1297,48 @@ def setup_chat_routes(
                 )
             if not (getattr(sess, "endpoint_url", "") or "").strip():
                 raise HTTPException(400, "Selected model endpoint is not configured")
+            # Automatically ground factual questions for small local models.
+            # The search toggle, global tool setting, and incognito mode remain
+            # authoritative. This only prefetches context; it does not grant
+            # the agent browser or other tools.
+            _search_denied_in_message = bool(
+                isinstance(message, str)
+                and re.search(
+                    r"\b(?:without (?:the )?internet|offline only|stay offline|no internet|no web|"
+                    r"don't search|do not search|don't use (?:the )?(?:web|internet)|"
+                    r"do not use (?:the )?(?:web|internet)|don't use external sources|"
+                    r"no web search|don't browse|do not browse)\b",
+                    message,
+                    re.IGNORECASE,
+                )
+            )
+            try:
+                from src.settings import get_setting
+                _disabled_tools_for_auto_search = set(get_setting("disabled_tools", []) or [])
+            except Exception:
+                _disabled_tools_for_auto_search = set()
+            _global_search_disabled = bool(
+                {"search", "web_search", "web_fetch"} & _disabled_tools_for_auto_search
+            )
+            try:
+                _small_local_model = (
+                    is_local_endpoint(sess.endpoint_url)
+                    and is_small_model_identifier(sess.model)
+                )
+            except Exception:
+                _small_local_model = False
+            if (
+                _small_local_model
+                and is_factual_lookup_request(message)
+                and not incognito
+                and not is_web_search_explicitly_denied(allow_web_search)
+                and not _search_denied_in_message
+                and not _global_search_disabled
+                and not tool_approval_continuation
+            ):
+                use_web = "true"
+                auto_search_grounding = True
+                logger.info("automatic web grounding enabled for factual query on small local model")
             if (
                 chat_mode == "chat"
                 and isinstance(message, str)
@@ -1361,6 +1437,8 @@ def setup_chat_routes(
             preset_id=preset_id,
             att_ids=att_ids,
             use_web=use_web,
+            auto_web_search=auto_search_grounding,
+            auto_web_search_query=message if auto_search_grounding else None,
             use_rag=use_rag,
             time_filter=time_filter,
             incognito=incognito,

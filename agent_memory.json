@@ -1,0 +1,24 @@
+{
+    "memory": [
+        {
+            "role": "user",
+            "content": "Hello, how are you?",
+            "timestamp": "2026-10-01T12:20:34.967991"
+        },
+        {
+            "role": "assistant",
+            "content": "Processed: Hello, how are you?",
+            "timestamp": "2026-10-01T12:20:34.976590"
+        },
+        {
+            "role": "user",
+            "content": "Remember this: I like Python.",
+            "timestamp": "2026-10-01T12:20:34.987938"
+        },
+        {
+            "role": "assistant",
+            "content": "Processed: Remember this: I like Python.",
+            "timestamp": "2026-10-01T12:20:34.996750"
+        }
+    ]
+}

@@ -265,6 +265,8 @@ class ChatProcessor:
         message: str,
         session: Any,
         use_web: bool = False,
+        auto_web_search: bool = False,
+        auto_web_search_query: Optional[str] = None,
         use_rag: bool = True,
         use_memory: bool = True,
         time_filter: Optional[str] = None,
@@ -398,37 +400,35 @@ class ChatProcessor:
 
                 # Default fallback is the first non-empty line of the original user message
                 fallback_query = next((line.strip() for line in message.split("\n") if line.strip()), "")
-                search_query = fallback_query
+                search_query = (auto_web_search_query or fallback_query) if auto_web_search else fallback_query
 
-                try:
-                    generated_query = llm_call(
-                        t_url,
-                        t_model,
-                        [
-                            {
-                                "role": "system",
-                                "content": (
-                                    "Extract a concise search query from the user's message. "
-                                    "Reply ONLY with the query."
-                                ),
-                            },
-                            {"role": "user", "content": message},
-                        ],
-                        headers=t_headers,
-                        temperature=0.1,
-                        max_tokens=50,
-                        timeout=15,
-                    ).strip()
+                if not auto_web_search:
+                    try:
+                        generated_query = llm_call(
+                            t_url,
+                            t_model,
+                            [
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "Extract a concise search query from the user's message. "
+                                        "Reply ONLY with the query."
+                                    ),
+                                },
+                                {"role": "user", "content": message},
+                            ],
+                            headers=t_headers,
+                            temperature=0.1,
+                            max_tokens=50,
+                            timeout=15,
+                        ).strip()
 
-                    if generated_query:
-                        # LLM successfully generated a non-empty query -> use the generated query
-                        search_query = generated_query
-                    else:
-                        # LLM returned an empty or whitespace-only query -> fall back to original query
-                        logger.warning("LLM generated an empty search query, using fallback.")
-                except Exception as e:
-                    # LLM failed (exception/error) -> fall back to original user query
-                    logger.warning(f"Failed to generate search query via LLM, using fallback: {e}")
+                        if generated_query:
+                            search_query = generated_query
+                        else:
+                            logger.warning("LLM generated an empty search query, using fallback.")
+                    except Exception as e:
+                        logger.warning(f"Failed to generate search query via LLM, using fallback: {e}")
 
                 search_query = " ".join(search_query.split())
                 if len(search_query) > 150:

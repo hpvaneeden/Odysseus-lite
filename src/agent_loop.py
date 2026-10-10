@@ -357,6 +357,11 @@ _AGENT_RULES = """\
     ```
 """
 
+_TOOL_CALL_PROTOCOL = """\
+## Tool-call protocol
+When the API provides tool schemas, invoke tools through its actual tool/function-calling interface. Never imitate a call by printing tool names, arguments, XML, JSON, or special tool markers as ordinary assistant text. For a text-only tool endpoint, use only the documented format that Odysseus parses and executes. If you cannot make the requested call, say so plainly; never claim it ran.
+"""
+
 _API_AGENT_RULES = """\
 ## Rules
 - Prefer native tool/function calling when tools are needed.
@@ -856,13 +861,14 @@ def _assemble_prompt(tool_names: set, disabled_tools: set = None, compact: bool 
             "You are an AI assistant with native tool/function calling. "
             "Only the tool schemas provided by the API are available for this turn. "
             "Use native tool calls when action is needed; do not write tool syntax or tool instructions in chat.",
+            _TOOL_CALL_PROTOCOL,
             "## Available tools\n" + ("\n".join(tool_lines) if tool_lines else "none"),
             _API_AGENT_RULES,
         ]
         parts.extend(_domain_rules_for_tools(included))
         return "\n\n".join(parts)
 
-    parts = [_AGENT_PREAMBLE]
+    parts = [_AGENT_PREAMBLE, _TOOL_CALL_PROTOCOL]
 
     # Collect full-block tool sections (with examples)
     full_blocks = []
@@ -4446,6 +4452,13 @@ async def stream_agent_loop(
     # that *can't* call the tool from looping forever.
     _intent_nudge_count = 0
     _MAX_INTENT_NUDGES = 2
+    _text_tool_retry_count = 0
+    _MAX_TEXT_TOOL_RETRIES = 1
+    _TEXTUAL_TOOL_MARKER_RE = re.compile(
+        r"<\|?tool_call\|?>|</?tool_call\b|\[/?TOOL_CALL\]|"
+        r"<function_model\b|<function_call\b|(?:^|\n)\s*call\s*:\s*[\w-]+",
+        re.IGNORECASE,
+    )
 
     # "I said I would, then didn't" detector. The pattern that breaks debug
     # loops on weak models (deepseek-v4-flash mid-2026): the model writes
@@ -4772,6 +4785,8 @@ async def stream_agent_loop(
         round_response = ""
         round_reasoning = ""  # reasoning_content deltas (DeepSeek-thinking, vLLM --reasoning-parser)
         native_tool_calls = []  # populated if model uses function calling
+        _tool_text_stream_pending = ""
+        _tool_text_stream_suppressed = False
 
         _active_route_state = {
             "messages": messages,
@@ -5212,7 +5227,27 @@ async def stream_agent_loop(
                             full_response += _delta_text
                             data["delta"] = _delta_text
                         if not _ody_qwen_finetune_model or data.get("thinking"):
-                            yield f"data: {json.dumps(data)}\n\n"
+                            if data.get("thinking") or not all_tool_schemas or guide_only or _ody_qwen_finetune_model:
+                                yield f"data: {json.dumps(data)}\n\n"
+                            elif not _tool_text_stream_suppressed:
+                                # Keep a short rolling tail so a tool marker split
+                                # across model chunks can be recognized before it is
+                                # shown. Once a textual call starts, hide the rest of
+                                # that round; valid calls execute through the parser,
+                                # while malformed ones get one recovery turn below.
+                                _tool_text_stream_pending += _delta_text
+                                _marker = _TEXTUAL_TOOL_MARKER_RE.search(_tool_text_stream_pending)
+                                if _marker:
+                                    _visible_text = _tool_text_stream_pending[:_marker.start()]
+                                    _tool_text_stream_pending = ""
+                                    _tool_text_stream_suppressed = True
+                                else:
+                                    _flush_count = max(0, len(_tool_text_stream_pending) - 64)
+                                    _visible_text = _tool_text_stream_pending[:_flush_count]
+                                    _tool_text_stream_pending = _tool_text_stream_pending[_flush_count:]
+                                if _visible_text:
+                                    data["delta"] = _visible_text
+                                    yield f"data: {json.dumps(data)}\n\n"
                     elif data.get("error"):
                         err_msg = data.get("error", "unknown")
                         logger.error(f"Agent round {round_num}: stream error: {err_msg}")
@@ -5224,6 +5259,10 @@ async def stream_agent_loop(
                 # Forward error events to frontend as visible text
                 yield chunk
             # Intercept [DONE] — don't forward until all rounds finish
+
+        if _tool_text_stream_pending and not _tool_text_stream_suppressed:
+            yield f'data: {json.dumps({"delta": _tool_text_stream_pending})}\n\n'
+            _tool_text_stream_pending = ""
 
         logger.info(
             "[agent-timing] round_stream_done round=%s elapsed=%.3fs text_chars=%s tool_calls=%s first_event=%s first_token=%s",
@@ -5421,6 +5460,10 @@ async def stream_agent_loop(
         # persisted text either — otherwise it streams once and then disappears
         # on reload (#3222 follow-up).
         cleaned_round = strip_tool_blocks(round_response, skip_fenced=(_is_api_model and not used_native and not guide_only)).strip()
+        _textual_tool_attempt = bool(_TEXTUAL_TOOL_MARKER_RE.search(round_response or ""))
+        if _textual_tool_attempt and not tool_blocks:
+            # Do not persist malformed tool-call syntax as assistant prose.
+            cleaned_round = ""
         round_texts.append(cleaned_round)
         round_models.append(_round_actual_model)
         round_endpoint_ids.append(_round_actual_endpoint_id)
@@ -5481,6 +5524,31 @@ async def stream_agent_loop(
             # _MAX_INTENT_NUDGES so a model that genuinely cannot use the
             # tool doesn't pin us in a forever loop.
             _intent_text = _strip_think_blocks(cleaned_round).strip()
+            if (
+                _textual_tool_attempt
+                and all_tool_schemas
+                and not guide_only
+                and not _force_answer
+                and _text_tool_retry_count < _MAX_TEXT_TOOL_RETRIES
+            ):
+                _text_tool_retry_count += 1
+                logger.warning(
+                    "[agent] round %d emitted tool-call syntax as text without a parsed call; retrying through tool interface",
+                    round_num,
+                )
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "Your previous response printed tool-call syntax as ordinary text, "
+                        "so no tool ran. The tool interface and schemas are available. "
+                        "Make the actual tool/function call through the supplied tool interface "
+                        "now; do not print the call syntax in your message. If no tool is needed, "
+                        "answer normally and do not claim an action was performed."
+                    ),
+                })
+                yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+                continue
+
             _intent_match = _INTENT_RE.search(_intent_text) if _intent_text else None
             # Only nudge when the round REALLY looks like an unfinished
             # promise: short response (<400 chars), no fenced code/answer,

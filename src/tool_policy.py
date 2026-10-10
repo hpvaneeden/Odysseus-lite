@@ -19,6 +19,47 @@ GUIDE_ONLY_DIRECTIVE = (
 WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
 
 
+_FACTUAL_LOOKUP_RE = re.compile(
+    r"\b(?:what|who|when|where|why|how|which|whose|whom|is|are|was|were|"
+    r"does|do|did|can|could|would|should|has|have|had|will|define|explain|"
+    r"describe|compare|identify|list|tell\s+me\s+about|what'?s)\b",
+    re.IGNORECASE,
+)
+_SMALL_MODEL_SIZE_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*b\b", re.IGNORECASE)
+
+
+def is_factual_lookup_request(message: object) -> bool:
+    """Identify questions and direct requests for factual explanations."""
+
+    if not isinstance(message, str):
+        return False
+    text = message.strip()
+    if not text or len(text) > 4000:
+        return False
+    if re.search(
+        r"\b(?:write|draft|compose|brainstorm|imagine|roleplay|translate|"
+        r"summarize\s+this|fix\s+this\s+code|debug\s+this)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+    return "?" in text or bool(_FACTUAL_LOOKUP_RE.search(text))
+
+
+def is_small_model_identifier(model: object, max_parameters_b: float = 8.0) -> bool:
+    """Recognize a small model when its identifier states a parameter count."""
+
+    if not isinstance(model, str):
+        return False
+    match = _SMALL_MODEL_SIZE_RE.search(model)
+    if not match:
+        return False
+    try:
+        return float(match.group(1)) <= max_parameters_b
+    except ValueError:
+        return False
+
+
 def tool_toggle_enabled(value: object) -> bool:
     """Return true only for explicit true-like tool toggle values."""
 

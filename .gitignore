@@ -26,6 +26,7 @@ secrets.env.*
 
 # Data — all user data stays local
 data/
+chroma/
 !services/hwfit/data/
 !services/hwfit/data/hf_models.json
 logs/

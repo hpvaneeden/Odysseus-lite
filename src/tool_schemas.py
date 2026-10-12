@@ -64,7 +64,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Quick single web lookup for a fact or current event mid-task. NOT for 'research X' / 'do research on X' — those are deep-research jobs; use trigger_research instead.",
+            "description": "Quick web lookup for a fact or current event mid-task. For multi-part questions, make focused additional searches when the first results do not verify each important requirement. NOT for 'research X' / 'do research on X' — those are deep-research jobs; use trigger_research instead.",
             "parameters": {
                 "type": "object",
                 "properties": {

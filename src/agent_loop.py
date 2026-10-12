@@ -474,6 +474,10 @@ _DOMAIN_RULES = {
 ## Web rules
 - For web lookup/search/latest/current requests, use `web_search` or `web_fetch`.
 - Do not use shell, Python, curl, requests, or scraping code for web lookup unless web tools are unavailable or already failed.
+- For multi-part requests and recommendations, identify the user's material constraints (for example: accessibility, public transport, opening hours, price) and verify each one before answering.
+- After the first search, check whether the returned pages actually support every important constraint. If one is missing, make a focused follow-up `web_search` for that detail before settling on a recommendation.
+- Prefer current primary/official sources for operational details. A result that supports accessibility does not by itself establish transport, hours, or current availability.
+- If a detail remains unsupported after a focused search, say that it is unverified instead of filling the gap with an assumption.
 - "Research X" means `trigger_research`, not a one-off `web_search`, unless the user explicitly asks for a quick lookup.""",
     "documents": """\
 ## Document rules
@@ -593,7 +597,7 @@ Or with JSON for fresh news:
 ```web_search
 {"query": "<your query>", "time_filter": "day"}
 ```
-Search the web for a SINGLE quick fact/lookup mid-task. For news / "today" / "latest" queries, pass `time_filter` ("day", "week", "month", or "year"). NOT for "research X" / "do research on X" / "look into X" requests — those mean a multi-source DEEP RESEARCH job: use `trigger_research` instead (it runs in the Deep Research sidebar and produces a full report). web_search = one quick query; trigger_research = a researched report.
+Search the web for a quick fact/lookup mid-task. For multi-part questions, make additional focused `web_search` calls when the first results do not verify every important requirement. For news / "today" / "latest" queries, pass `time_filter` ("day", "week", "month", or "year"). NOT for "research X" / "do research on X" / "look into X" requests — those mean a multi-source DEEP RESEARCH job: use `trigger_research` instead (it runs in the Deep Research sidebar and produces a full report). web_search = quick lookup; trigger_research = a researched report.
 If this `web_search` tool section is visible, search is available. Do NOT tell the user web/search tools are unavailable.
 Use this instead of `bash`, `curl`, `python`, `requests`, or scraping code for web lookup/search/latest/current requests.""",
 
@@ -3426,7 +3430,7 @@ async def stream_agent_loop(
     model: str,
     messages: List[Dict],
     headers: Optional[Dict] = None,
-    temperature: float = 0.3,
+    temperature: float = 0.5,
     max_tokens: int = 4096,
     prompt_type: Optional[str] = None,
     max_rounds: int = MAX_AGENT_ROUNDS,
@@ -4809,6 +4813,21 @@ async def stream_agent_loop(
         agent_stream_timeout = int(get_setting("agent_stream_timeout_seconds", 300) or 300)
 
         _tool_names_sent = [t.get("function", {}).get("name") for t in (all_tool_schemas or []) if t.get("function")]
+        # Some small models imitate calls as Python, e.g. `manage_memory(query=...)`,
+        # instead of using the native tool channel or Odysseus's textual parser format.
+        # Recognize only names actually offered this round, at line start, so ordinary
+        # prose and code examples mentioning a tool are not mistaken for an attempt.
+        _textual_tool_marker_re = _TEXTUAL_TOOL_MARKER_RE
+        if _tool_names_sent:
+            _tool_name_alternation = "|".join(
+                re.escape(name) for name in _tool_names_sent if isinstance(name, str) and name
+            )
+            if _tool_name_alternation:
+                _textual_tool_marker_re = re.compile(
+                    _TEXTUAL_TOOL_MARKER_RE.pattern
+                    + rf"|(?:^|\n)\s*(?:{_tool_name_alternation})\s*\(",
+                    re.IGNORECASE,
+                )
         logger.info(f"[agent-debug] round={round_num} model={model} _is_api_model={_is_api_model} tools_sent={len(_tool_names_sent)} tool_names={_tool_names_sent[:15]} relevant_tools={sorted(_relevant_tools)[:15] if _relevant_tools else 'ALL'}")
 
         # Once a fallback produces substantive output, keep that exact route
@@ -5227,7 +5246,15 @@ async def stream_agent_loop(
                             full_response += _delta_text
                             data["delta"] = _delta_text
                         if not _ody_qwen_finetune_model or data.get("thinking"):
-                            if data.get("thinking") or not all_tool_schemas or guide_only or _ody_qwen_finetune_model:
+                            if data.get("thinking"):
+                                # Keep reasoning internally for providers that need it on
+                                # later rounds, but don't expose it to the user when tools
+                                # are available. Small models can leak fake calls and
+                                # planning text through this channel, bypassing the
+                                # ordinary assistant-text tool-call filter below.
+                                if not all_tool_schemas or guide_only or _ody_qwen_finetune_model:
+                                    yield f"data: {json.dumps(data)}\n\n"
+                            elif not all_tool_schemas or guide_only or _ody_qwen_finetune_model:
                                 yield f"data: {json.dumps(data)}\n\n"
                             elif not _tool_text_stream_suppressed:
                                 # Keep a short rolling tail so a tool marker split
@@ -5236,7 +5263,7 @@ async def stream_agent_loop(
                                 # that round; valid calls execute through the parser,
                                 # while malformed ones get one recovery turn below.
                                 _tool_text_stream_pending += _delta_text
-                                _marker = _TEXTUAL_TOOL_MARKER_RE.search(_tool_text_stream_pending)
+                                _marker = _textual_tool_marker_re.search(_tool_text_stream_pending)
                                 if _marker:
                                     _visible_text = _tool_text_stream_pending[:_marker.start()]
                                     _tool_text_stream_pending = ""
@@ -5460,7 +5487,10 @@ async def stream_agent_loop(
         # persisted text either — otherwise it streams once and then disappears
         # on reload (#3222 follow-up).
         cleaned_round = strip_tool_blocks(round_response, skip_fenced=(_is_api_model and not used_native and not guide_only)).strip()
-        _textual_tool_attempt = bool(_TEXTUAL_TOOL_MARKER_RE.search(round_response or ""))
+        _textual_tool_attempt = bool(
+            _textual_tool_marker_re.search(round_response or "")
+            or _textual_tool_marker_re.search(round_reasoning or "")
+        )
         if _textual_tool_attempt and not tool_blocks:
             # Do not persist malformed tool-call syntax as assistant prose.
             cleaned_round = ""

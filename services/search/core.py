@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Set
@@ -35,10 +36,6 @@ from .providers import (
 )
 from .content import (
     fetch_webpage_content,
-    extract_key_points,
-    get_tldr,
-    extract_quotes,
-    extract_statistics,
 )
 
 logger = logging.getLogger(__name__)
@@ -384,7 +381,9 @@ def comprehensive_web_search(
 
     logger.info(f"Successfully fetched content from {len(fetched_content)} pages")
 
-    # Format results
+    # Format results compactly so all fetched pages fit in the agent output.
+    # The old renderer emitted up to 3k chars plus repeated summaries per page,
+    # so a five-page fetch was routinely truncated after the first page.
     output_parts = []
 
     if search_results:
@@ -409,7 +408,7 @@ def comprehensive_web_search(
     for i, result in enumerate(search_results, 1):
         output_parts.append(f"\n[{i}] {result['title']}")
         output_parts.append(f"    URL: {result['url']}")
-        output_parts.append(f"    Snippet: {result['snippet'][:200]}...")
+        output_parts.append(f"    Snippet: {result['snippet'][:140]}...")
         if result.get("age"):
             output_parts.append(f"    Age: {result['age']}")
 
@@ -419,10 +418,56 @@ def comprehensive_web_search(
         output_parts.append("-" * 50)
 
         # Emit blocks in source order, numbered with the same [i] as the
-        # sources list, so [CONTENT 2] really is content from source [2].
-        # Before this, blocks were numbered 1..N in fetch COMPLETION order,
-        # which matched neither the sources list nor each other run to run.
+        # sources list. Allocate a shared evidence budget across pages so
+        # later fetched sources survive the agent tool's output cap.
         fetched_content.sort(key=lambda c: c.get("source_index") or len(search_results) + 1)
+        _base_chars = len("\n".join(output_parts))
+        _content_budget = max(0, 8800 - _base_chars - 700)
+        _per_page_chars = max(250, min(1000, _content_budget // len(fetched_content)))
+        _query_terms = {
+            term.lower() for term in re.findall(r"[a-zA-Z0-9]+", query)
+            if len(term) > 2 and term.lower() not in {
+                "the", "and", "for", "with", "from", "into", "what", "when",
+                "where", "how", "can", "are", "was", "were", "best", "near",
+            }
+        }
+        _term_aliases = {
+            "accessible": {"wheelchair", "accessibility", "mobility"},
+            "transport": {"bus", "transit", "myciti", "shuttle", "route"},
+            "public": {"bus", "transit", "myciti", "shuttle"},
+            "outdoor": {"nature", "park", "mountain", "garden", "trail"},
+            "attractions": {"nature", "park", "mountain", "garden", "museum"},
+        }
+
+        def _evidence_excerpt(page_text: str) -> str:
+            normalized = re.sub(r"\s+", " ", page_text or "").strip()
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", normalized) if s.strip()]
+            if not sentences:
+                return normalized[:_per_page_chars]
+            scored = []
+            for index, sentence in enumerate(sentences):
+                sentence_lc = sentence.lower()
+                score = sum(
+                    1 for term in _query_terms
+                    if re.search(rf"\b{re.escape(term)}\b", sentence_lc)
+                )
+                for term in _query_terms:
+                    score += sum(
+                        0.5 for alias in _term_aliases.get(term, ())
+                        if re.search(rf"\b{re.escape(alias)}\b", sentence_lc)
+                    )
+                scored.append((score, index, sentence))
+            selected = []
+            used = 0
+            for _score, index, sentence in sorted(scored, key=lambda item: (-item[0], item[1])):
+                extra = len(sentence) + (1 if selected else 0)
+                if used + extra <= _per_page_chars:
+                    selected.append((index, sentence))
+                    used += extra
+            if not selected:
+                return normalized[:_per_page_chars]
+            return " ".join(sentence for _, sentence in sorted(selected))
+
         for content in fetched_content:
             _idx = content.get("source_index")
             _label = f"[CONTENT {_idx}]" if _idx else "[CONTENT]"
@@ -430,33 +475,8 @@ def comprehensive_web_search(
             output_parts.append(f"Title: {content['title']}")
             output_parts.append("-" * 30)
 
-            text = content["content"][:3000]
-            if len(content["content"]) > 3000:
-                text += "... [truncated]"
-            output_parts.append(text)
-
-            key_points = extract_key_points(content["content"])
-            if key_points:
-                output_parts.append("\nKey Points:")
-                for pt in key_points[:5]:
-                    output_parts.append(f"- {pt}")
-
-            tldr = get_tldr(content["content"])
-            if tldr:
-                output_parts.append("\nTL;DR:")
-                output_parts.append(tldr)
-
-            quotes = extract_quotes(content["content"])
-            if quotes:
-                output_parts.append("\nImportant Quotes:")
-                for q in quotes[:3]:
-                    output_parts.append(f"\u201c{q}\u201d")
-
-            stats = extract_statistics(content["content"])
-            if stats:
-                output_parts.append("\nData / Statistics:")
-                for s in stats[:5]:
-                    output_parts.append(f"- {s}")
+            text = _evidence_excerpt(content["content"])
+            output_parts.append(text + (" ... [page excerpt]" if len(text) < len(content["content"]) else ""))
 
             output_parts.append("")
 

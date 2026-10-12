@@ -1069,8 +1069,12 @@ def setup_chat_routes(
         auto_search_grounding = False
         _explicit_web_intent = False
         _explicit_browser_intent = False
+        _explicit_manage_memory_intent = False
         if isinstance(message, str):
             _msg_l = message.lower()
+            _explicit_manage_memory_intent = bool(
+                re.search(r"\bmanage_memory\b", _msg_l)
+            )
             _explicit_web_intent = bool(re.search(
                 r"\b(search|look\s*up|lookup|google|browse|web|online|latest|current|today|news|weather|forecast|rate|exchange\s+rate)\b",
                 _msg_l,
@@ -1578,13 +1582,17 @@ def setup_chat_routes(
             # when the request's explicit web setting enabled them.
             disabled_tools.update({
                 "bash", "python",
-                "search_chats", "manage_skills", "manage_memory",
+                "search_chats", "manage_skills",
                 "read_file", "write_file", "edit_file",
                 "create_document", "edit_document", "update_document",
                 "send_email", "reply_to_email",
                 "manage_notes", "manage_calendar", "manage_tasks",
                 "api_call",
             })
+            # Keep an explicitly requested memory lookup available alongside
+            # web search. Privacy and privilege gates below still take priority.
+            if not _explicit_manage_memory_intent:
+                disabled_tools.add("manage_memory")
             if _search_enabled:
                 disabled_tools.difference_update(WEB_TOOL_NAMES)
             else:

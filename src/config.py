@@ -58,7 +58,7 @@ class LLMConfig(BaseSettings):
     request_timeout: int = Field(default=20, description="Request timeout in seconds")
     llm_stream_timeout: int = Field(default=30, description="LLM streaming timeout in seconds")
     llm_max_tokens: int = Field(default=4096, description="Maximum tokens for LLM responses")
-    llm_temperature: float = Field(default=0.3, description="Temperature for LLM responses")
+    llm_temperature: float = Field(default=0.5, description="Temperature for LLM responses")
     
     model_config = SettingsConfigDict(env_prefix="LLM_")
 

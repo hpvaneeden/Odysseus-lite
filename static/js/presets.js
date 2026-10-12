@@ -296,7 +296,7 @@ function _tryLoadTemplate(name) {
   const tokensValue = document.getElementById('tokens-value');
   if (promptInput) promptInput.value = tmpl.system_prompt || '';
   if (tempInput) {
-    tempInput.value = tmpl.temperature ?? 1.0;
+    tempInput.value = tmpl.temperature ?? 0.5;
     if (tempValue) tempValue.textContent = parseFloat(tempInput.value).toFixed(1);
     tempInput.dispatchEvent(new Event('input'));
   }
@@ -513,7 +513,7 @@ export async function loadPresets(showError) {
       ) {
         custom.enabled = false;
         custom.system_prompt = '';
-        custom.temperature = 1.0;
+        custom.temperature = 0.5;
         custom.max_tokens = 0;
         custom.inject_prefix = custom.inject_prefix || '';
         custom.inject_suffix = custom.inject_suffix || '';
@@ -563,7 +563,7 @@ export function openCustomPresetModal() {
 
   const savedConfig = presets.custom || {
     character_name: "",
-    temperature: 1.0,
+    temperature: 0.5,
     max_tokens: 0,
     system_prompt: ""
   };
@@ -1092,7 +1092,7 @@ export function onSessionSwitch(sessionId) {
         ...presets.custom,
         character_name: charName,
         system_prompt: tmpl.system_prompt || tmpl.prompt || '',
-        temperature: tmpl.temperature ?? 1.0,
+        temperature: tmpl.temperature ?? 0.5,
         max_tokens: tmpl.max_tokens || 0,
         enabled: true,
       };

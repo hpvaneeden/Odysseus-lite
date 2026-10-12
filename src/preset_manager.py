@@ -55,7 +55,7 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
         },
         "custom": {
             "name": "Custom",
-            "temperature": 1.0,
+            "temperature": 0.5,
             "max_tokens": 0,
             "system_prompt": "",
             "inject_prefix": "",
@@ -90,7 +90,7 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
                 ):
                     custom["enabled"] = False
                     custom["system_prompt"] = ""
-                    custom["temperature"] = 1.0
+                    custom["temperature"] = 0.5
                     custom["max_tokens"] = 0
                     custom.setdefault("inject_prefix", "")
                     custom.setdefault("inject_suffix", "")

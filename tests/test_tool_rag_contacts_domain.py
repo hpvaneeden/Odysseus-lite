@@ -70,3 +70,14 @@ def test_non_contact_requests_do_not_match_contacts_domain():
     assert "contacts" not in _classify("reply to the latest email in my inbox")["domains"]
     assert "contacts" not in _classify("generate an image of a sunset")["domains"]
     assert "contacts" not in _classify("what's 2 plus 2")["domains"]
+
+
+def test_news_digest_rules_are_added_only_when_web_search_is_available():
+    web_rules = "\n".join(_domain_rules_for_tools({"web_search"}))
+    non_web_rules = "\n".join(_domain_rules_for_tools({"read_file"}))
+
+    assert "## News digest rules" in web_rules
+    assert "saved context" in web_rules
+    assert "Treat snippets as discovery only" in web_rules
+    assert "betting tips" in web_rules
+    assert "## News digest rules" not in non_web_rules

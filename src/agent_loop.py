@@ -5731,6 +5731,16 @@ async def stream_agent_loop(
         tool_result_records = []  # aligned structured provenance for next round
         budget_hit = False
         for i, block in enumerate(tool_blocks):
+            if block.tool_type == "web_search":
+                from odysseus_extensions.news_search import expand_news_scope_followup
+                expanded_query = expand_news_scope_followup(block.content, messages)
+                if expanded_query is not None:
+                    block = ToolBlock(block.tool_type, expanded_query)
+                    tool_blocks[i] = block
+                    logger.info(
+                        "[news-search] expanded a clarified scope reply into an explicit query"
+                    )
+
             # --- Tool budget check ---
             if max_tool_calls > 0 and total_tool_calls >= max_tool_calls:
                 yield f'data: {json.dumps({"type": "budget_exceeded", "limit": max_tool_calls, "used": total_tool_calls})}\n\n'

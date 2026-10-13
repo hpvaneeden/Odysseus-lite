@@ -80,4 +80,5 @@ def test_news_digest_rules_are_added_only_when_web_search_is_available():
     assert "saved context" in web_rules
     assert "Treat snippets as discovery only" in web_rules
     assert "betting tips" in web_rules
+    assert "never send the fragment \"mix\"" in web_rules
     assert "## News digest rules" not in non_web_rules

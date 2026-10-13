@@ -31,6 +31,7 @@ from src.context_compactor import (
 )
 from src.settings import get_setting
 from src.prompt_security import untrusted_context_message
+from odysseus_extensions.social_skill import is_explicit_request
 from src.tool_security import (
     blocked_tools_for_owner,
     delegated_credential_blocked_tools,
@@ -1335,6 +1336,8 @@ def _is_explicit_continuation(text: str) -> bool:
 def _is_casual_low_signal(text: str) -> bool:
     """True for short greetings/slang that should not inherit stale context."""
     s = str(text or "").strip()
+    if is_explicit_request(s):
+        return False
     m = _CASUAL_OPENING_RE.match(s)
     if not m:
         return False

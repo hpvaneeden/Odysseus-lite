@@ -19,6 +19,10 @@ from src.model_context import estimate_tokens, get_context_length
 from src.auth_helpers import effective_user
 from src.prompt_security import untrusted_context_message
 from src.attachment_refs import attachment_ref
+from odysseus_extensions.social_skill import (
+    compact_social_history,
+    is_explicit_request,
+)
 from routes.prefs_routes import _load_for_user as load_prefs_for_user
 
 from fastapi import HTTPException
@@ -41,6 +45,8 @@ _CASUAL_BLOCKLIST_RE = re.compile(
 def _is_casual_low_signal(text: str) -> bool:
     """Short greetings/slang should not pull skills, RAG, or docs."""
     s = str(text or "").strip()
+    if is_explicit_request(s):
+        return False
     m = _CASUAL_OPENING_RE.match(s)
     if not m:
         return False
@@ -789,6 +795,7 @@ async def build_chat_context(
         except Exception:
             logger.debug("Failed to add current date/time context", exc_info=True)
 
+    messages = compact_social_history(messages)
     route_messages = list(messages)
     # Explicit fallback routing must shape from the same route-neutral prompt
     # for every candidate. Running selected-model compaction here would mutate

@@ -341,6 +341,14 @@ def comprehensive_web_search(
                 return False
         return True
 
+    # A whitelist constrains the evidence set, not only which pages get fetched.
+    if domain_whitelist is not None:
+        search_results = [
+            result
+            for result in search_results
+            if url_passes_filters(str(result.get("url") or ""))
+        ]
+
     filtered_urls = [r["url"] for r in search_results[:max_pages] if url_passes_filters(r["url"])]
     if not filtered_urls:
         logger.warning("All URLs filtered out by advanced criteria")

@@ -4,6 +4,10 @@ import json
 from typing import Dict, Any
 
 from src.constants import MAX_OUTPUT_CHARS
+from odysseus_extensions.official_source_search import (
+    has_fetched_official_content,
+    official_source_plan,
+)
 
 class WebSearchTool:
     async def execute(self, content: str, ctx: dict) -> dict:
@@ -38,6 +42,15 @@ class WebSearchTool:
                 time_filter = "month"
             elif " news" in q_lc or q_lc.startswith("news ") or q_lc.endswith(" news"):
                 time_filter = "week"
+        official_plan = official_source_plan(query)
+        search_query = query
+        domain_whitelist = None
+        if official_plan:
+            search_query = official_plan.search_query(query)
+            domain_whitelist = official_plan.allowed_hosts
+            # Observation dates can legitimately be older than a day even when
+            # they are the latest published official data.
+            time_filter = None
         loop = asyncio.get_running_loop()
         if progress_cb:
             await progress_cb({
@@ -49,9 +62,10 @@ class WebSearchTool:
                 loop.run_in_executor(
                     None,
                     lambda: comprehensive_web_search(
-                        query,
+                        search_query,
                         max_pages=max_pages,
                         time_filter=time_filter,
+                        domain_whitelist=domain_whitelist,
                         return_sources=True,
                     ),
                 ),
@@ -73,7 +87,23 @@ class WebSearchTool:
                 "elapsed_s": 30,
                 "tail": "Search completed; preparing sources.",
             })
+        if official_plan and not has_fetched_official_content(text, official_plan):
+            return {
+                "error": (
+                    f"Official-source verification failed: no fetched page content from "
+                    f"{official_plan.authority} ({official_plan.host}). Do not report "
+                    "a value or observation date as verified."
+                ),
+                "exit_code": 1,
+            }
         output = text[:MAX_OUTPUT_CHARS] if len(text) > MAX_OUTPUT_CHARS else text
+        if official_plan:
+            output = (
+                f"OFFICIAL SOURCE REQUIRED: Use only fetched page content from "
+                f"{official_plan.authority} ({official_plan.host}). Verify the value "
+                f"and observation date in that content; do not use third-party "
+                f"snippets or mirrors as evidence.\n\n{output}"
+            )
         if sources:
             output += "\n\n<!-- SOURCES:" + json.dumps(sources) + " -->"
         return {"output": output, "exit_code": 0}

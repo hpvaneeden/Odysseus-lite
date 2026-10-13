@@ -31,9 +31,10 @@ The intended memory workflow is to search memory for each request, answer using 
 
 ## Current Sprint
 
-- [ ] **Official-source verification:** For explicit official-source requests, fetch the primary source and verify the value and observation date there; do not present a third-party mirror as official. Add the USD/ZAR SARB case as a regression scenario.
+- [x] **Official-source verification guard implemented:** Recognized SARB/FRED requests use first-party-only search results, avoid an inappropriate one-day freshness filter, and fail closed unless official page content is fetched. Regression coverage is added; the live Gemma rerun is still pending.
 - [ ] **Codebase audit:** Map the local input/output prompt-routing hooks and identify extension points for additive work.
-- [ ] **Social interaction skill (`social_skill.py`):** Develop a modular, token-saving layer to handle conversational filler outside the core LLM execution loop.
+- [x] **Social interaction (phase 1):** Added `odysseus_extensions/social_skill.py` to compact only exact, completed greeting/thanks exchanges from the model prompt copy and protect concise information requests from low-signal routing. Current user text, emotional-support content, mixed requests, tool turns, and stored history remain unchanged. Pytest and live Gemma evaluation are pending.
+- [ ] **Social interaction follow-up:** Evaluate any standalone-greeting fast path with real conversations; do not rewrite emotional or task content or postprocess streamed persona output.
 - [ ] **Audio pipeline:** Research and integrate lightweight, local speech-to-text (STT) and text-to-speech (TTS) pipelines.
 - [ ] **UI/UX:** Design a basic graphical element or visual state indicator for the Odysseus desktop experience.
 

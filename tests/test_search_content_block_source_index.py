@@ -59,3 +59,48 @@ def test_redirected_fetch_keeps_its_source_index(core, monkeypatch):
     monkeypatch.setattr(core, "fetch_webpage_content", fetch)
     out = core.comprehensive_web_search("test query", max_pages=2, max_workers=2)
     assert "[CONTENT 2] From: http://final.example/landing" in out
+
+
+def test_domain_whitelist_removes_nonmatching_results_from_evidence(core, monkeypatch):
+    results = [
+        {
+            "url": "https://allratestoday.com/central-bank-rates-api/sarb/",
+            "title": "Third-party mirror",
+            "snippet": "1 USD = 16.607 ZAR",
+        },
+        {
+            "url": "https://www.resbank.co.za/current-market-rates",
+            "title": "Reserve Bank current market rates",
+            "snippet": "Rand per US Dollar, 16.53, 2026-10-09",
+        },
+    ]
+    monkeypatch.setattr(core, "_call_provider", lambda *a, **k: results)
+    fetched = []
+
+    def fetch(url, timeout=8, retry_attempt=0):
+        fetched.append(url)
+        return {
+            "success": True,
+            "url": url,
+            "title": "Official rates",
+            "content": "Rand per US Dollar 16.53 on 2026-10-09.",
+        }
+
+    monkeypatch.setattr(core, "fetch_webpage_content", fetch)
+    output, sources = core.comprehensive_web_search(
+        "site:resbank.co.za latest USD/ZAR official rate",
+        max_pages=2,
+        max_workers=1,
+        domain_whitelist={"resbank.co.za", "www.resbank.co.za"},
+        return_sources=True,
+    )
+
+    assert "Third-party mirror" not in output
+    assert "allratestoday.com" not in output
+    assert "16.607" not in output
+    assert "16.53" in output
+    assert fetched == ["https://www.resbank.co.za/current-market-rates"]
+    assert sources == [{
+        "url": "https://www.resbank.co.za/current-market-rates",
+        "title": "Reserve Bank current market rates",
+    }]

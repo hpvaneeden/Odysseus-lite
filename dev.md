@@ -31,6 +31,7 @@ The intended memory workflow is to search memory for each request, answer using 
 
 ## Current Sprint
 
+- [ ] **Official-source verification:** For explicit official-source requests, fetch the primary source and verify the value and observation date there; do not present a third-party mirror as official. Add the USD/ZAR SARB case as a regression scenario.
 - [ ] **Codebase audit:** Map the local input/output prompt-routing hooks and identify extension points for additive work.
 - [ ] **Social interaction skill (`social_skill.py`):** Develop a modular, token-saving layer to handle conversational filler outside the core LLM execution loop.
 - [ ] **Audio pipeline:** Research and integrate lightweight, local speech-to-text (STT) and text-to-speech (TTS) pipelines.

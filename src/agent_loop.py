@@ -560,6 +560,9 @@ def _domain_rules_for_tools(tool_names: set) -> list[str]:
     for domain, domain_tools in _DOMAIN_TOOL_MAP.items():
         if names & domain_tools:
             rules.append(_DOMAIN_RULES[domain])
+    if "web_search" in names:
+        from odysseus_extensions.news_search import NEWS_DIGEST_RULES
+        rules.append(NEWS_DIGEST_RULES)
     if names & {"create_session", "list_sessions", "manage_session", "manage_documents", "manage_notes", "manage_calendar", "manage_tasks", "manage_skills", "manage_research"}:
         rules.append(_LINK_RULES)
     return rules

@@ -1,6 +1,6 @@
 # Odysseus development notes
 
-Updated: 2026-10-12
+Updated: 2026-10-13
 
 
 ## Goal
@@ -8,6 +8,38 @@ Updated: 2026-10-12
 Make Odysseus reliable with small local language models. Keep the model focused on the current conversation, use persistent memory as an external source of truth, search the web when facts may be current, and make tool use happen through Odysseus's real tool-calling layer rather than appearing as pretend calls in assistant text.
 
 The intended memory workflow is to search memory for each request, answer using returned memories when relevant, clearly distinguish memory from general knowledge, and save useful user facts and decisions. Automatic factual web search is enabled by the user's preference, subject to incognito and explicit search-off settings.
+
+
+## Active Architecture Baseline
+
+- **Core LLM engine:** Ollama serves `hf.co/bartowski/google_gemma-4-E2B-it-GGUF:Q8_0`, locally referred to as `gemma4:e2b`.
+- **External memory:** Per-user, cross-session memory is managed by the Odysseus harness, with ChromaDB-backed vector retrieval. The harness chooses and injects memory context; the model itself remains stateless between sessions.
+- **Search infrastructure:** SearXNG provides live web lookup beyond the model's static knowledge.
+- **Integration framework:** Odysseus coordinates agent loops and tool execution. The user's reported runtime also uses secure E2B Python sandboxes.
+
+## What We Did and How
+
+- [x] **Reliable tool calling:** Tool execution improved from frequent plain-text imitations to near-perfect execution in the current test set. Tool events and results are checked, not inferred from the final answer alone.
+- [x] **Memory harness integration:** Improved memory writes, cross-session retrieval, preference correction, and context injection through the harness and ChromaDB-backed vector store.
+- [x] **Web search improvements:** Refined query generation, search-result formatting, and follow-up search behavior for small-model web lookups.
+- [x] **Q8 Gemma optimization:** The local Gemma 4 E2B Q8 setup has demonstrated behavior and reasoning comparable to a substantially larger model for the evaluated workflows.
+
+## Git Conflict Mitigation Strategy
+
+- The Gemma-specific harness changes already present include edits to upstream framework files. Preserve and document that existing work.
+- For future features, prefer isolated additions over further core changes. New custom modules and skills (social interaction, audio, UI) should live in a standalone directory such as `/odysseus_extensions/` so upstream updates remain easier to integrate.
+
+## Current Sprint
+
+- [ ] **Codebase audit:** Map the local input/output prompt-routing hooks and identify extension points for additive work.
+- [ ] **Social interaction skill (`social_skill.py`):** Develop a modular, token-saving layer to handle conversational filler outside the core LLM execution loop.
+- [ ] **Audio pipeline:** Research and integrate lightweight, local speech-to-text (STT) and text-to-speech (TTS) pipelines.
+- [ ] **UI/UX:** Design a basic graphical element or visual state indicator for the Odysseus desktop experience.
+
+## Future Horizons (Phase 5+)
+
+- [ ] **Dynamic resource-driven engineering:** Build a workflow where Odysseus can find, download, and ingest external documentation or codebases when needed.
+- [ ] **C++ code generation:** Enable the assistant to read, modify, and optimize native C++ game code using current external resources, not only pretrained knowledge.
 
 
 ## Current evaluation setup
@@ -45,7 +77,7 @@ A learned skill named `external-memory-search-and-response-handling` (version 1.
 - Sequential Thinking MCP calls continued failing with blank error output across Gemma, Qwen2.5 2B, and Gemini, including after restarting the MCP server. This is a separate MCP issue and not a blocker for memory, web search, or the day-to-day assistant goal.
 - Earlier code checks were limited: `git diff --check -- src/agent_loop.py` passed at the time; syntax validation and the full test suite were not completed then. The `.git` metadata for `odysseus-main` was reported as invalid, so verify repository status before relying on it for future patch recovery.
 
-## Next steps
+## Earlier Evaluation Plan (2026-10-12)
 
 1. The user will clear saved memory and newly auto-added skills before beginning the clean real-world evaluation.
 2. Keep Gemma E2B Q8 fixed and run everyday scenarios: remember a preference and apply it later; recall a continuing task after a gap; correct a remembered fact; answer a current question using web search; complete a multi-step task with relevant tools.

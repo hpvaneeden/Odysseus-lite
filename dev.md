@@ -32,7 +32,8 @@ The intended memory workflow is to search memory for each request, answer using 
 ## Current Sprint
 
 - [x] **Official-source verification guard implemented:** Recognized SARB/FRED requests use first-party-only search results, avoid an inappropriate one-day freshness filter, and fail closed unless official page content is fetched. Regression coverage is added; the live Gemma rerun is still pending.
-- [ ] **News-digest quality:** A live test showed that a "give me a mix" follow-up became the literal query `today's news headlines mix`, contaminating results with irrelevant pages. Add deterministic scope-follow-up expansion, then retest geography, source relevance, fetched-page verification, and labeled links. Temperature remains at 0.5.
+- [x] **News scope follow-up:** A short "mix/both/all" response now expands only when it follows a news-headline request and an assistant geography clarification. It removes the ambiguous term from the query and preserves other search options.
+- [ ] **News-digest live evaluation:** Retest geography, source relevance, fetched-page verification, and labeled links with Gemma and SearXNG. The prior `today's news headlines mix` run selected irrelevant pages; temperature remains at 0.5.
 - [ ] **Codebase audit:** Map the local input/output prompt-routing hooks and identify extension points for additive work.
 - [x] **Social interaction (phase 1):** Added `odysseus_extensions/social_skill.py` to compact only exact, completed greeting/thanks exchanges from the model prompt copy and protect concise information requests from low-signal routing. Current user text, emotional-support content, mixed requests, tool turns, and stored history remain unchanged. Pytest and live Gemma evaluation are pending.
 - [ ] **Social interaction follow-up:** Evaluate any standalone-greeting fast path with real conversations; do not rewrite emotional or task content or postprocess streamed persona output.

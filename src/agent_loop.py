@@ -8,6 +8,7 @@ The LLM decides when to use tools by writing fenced code blocks.
 
 import asyncio
 import collections
+import difflib
 import json
 import re
 import time
@@ -3435,16 +3436,81 @@ def build_active_plan_note(approved_plan: str) -> str:
     )
 
 
-def _detect_runaway_call(call_freq, threshold=15):
-    """Tool name of a call signature repeated >= ``threshold`` times — a real
-    runaway loop. Counts IDENTICAL repeated calls (same tool AND args), so a
-    legitimate batch of distinct calls to one tool (e.g. creating 18 calendar
-    events at once) is NOT flagged. Returns ``None`` when nothing is runaway.
+_MAX_REPEATED_TOOL_CALLS = 3
+_SEARCH_ARGUMENT_KEYS = frozenset({"query", "search", "search_query", "term"})
 
-    ``call_freq`` is a Counter keyed by ``"{tool_type}:{content[:120]}"``.
+
+def _normalize_tool_call_args(content: str) -> str:
+    raw = str(content or "").strip()
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return " ".join(raw.split())
+    return json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _tool_call_signature(tool_name: str, content: str) -> str:
+    return f"{tool_name}:{_normalize_tool_call_args(content)}"
+
+
+def _near_identical_tool_args(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    try:
+        left_args = json.loads(left)
+        right_args = json.loads(right)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(left_args, dict) or not isinstance(right_args, dict):
+        return False
+    if left_args.keys() != right_args.keys():
+        return False
+
+    changed_keys = [key for key in left_args if left_args[key] != right_args[key]]
+    if (
+        len(changed_keys) != 1
+        or changed_keys[0].casefold() not in _SEARCH_ARGUMENT_KEYS
+    ):
+        return False
+    key = changed_keys[0]
+    left_query, right_query = left_args[key], right_args[key]
+    if not isinstance(left_query, str) or not isinstance(right_query, str):
+        return False
+    if min(len(left_query), len(right_query)) < 12:
+        return False
+    return difflib.SequenceMatcher(
+        None, left_query.casefold(), right_query.casefold()
+    ).ratio() >= 0.8
+
+
+def _detect_runaway_call(
+    call_freq, threshold: int = _MAX_REPEATED_TOOL_CALLS
+):
+    """Return a tool whose identical or near-identical call repeats too often.
+
+    JSON argument order/whitespace differences normalize to the same signature.
+    Similarity is limited to a single search-query value so distinct writes,
+    such as separate calendar events, are not collapsed into one runaway.
     """
-    sig = next((s for s, n in call_freq.items() if n >= threshold), None)
-    return sig.split(":", 1)[0] if sig else None
+    groups = []
+    for signature, count in call_freq.items():
+        tool_name, separator, args = signature.partition(":")
+        if not separator:
+            continue
+        for group in groups:
+            if (
+                group["tool"] == tool_name
+                and _near_identical_tool_args(group["args"], args)
+            ):
+                group["count"] += count
+                if group["count"] >= threshold:
+                    return tool_name
+                break
+        else:
+            groups.append({"tool": tool_name, "args": args, "count": count})
+            if count >= threshold:
+                return tool_name
+    return None
 
 
 async def stream_agent_loop(
@@ -5675,15 +5741,18 @@ async def stream_agent_loop(
         # Genuine exploration (new, distinct calls) is never useless, so
         # multi-step work (file hunts, multi-host ssh, build→test→fix) rides
         # all the way to a real answer. We bail only on a streak of useless
-        # rounds, or a single tool fired an absurd number of times (hard
-        # runaway backstop). On bail we don't give up — we force one
+        # rounds, or a repeated call reaching the hard runaway limit. On bail
+        # we don't give up — we force one
         # tool-free round so the model declares done or declares blocked,
         # mirroring Terminus's explicit-completion handshake.
-        _sig = "|".join(sorted(f"{b.tool_type}:{(b.content or '').strip()[:120]}" for b in tool_blocks))
+        _sig = "|".join(sorted(
+            _tool_call_signature(b.tool_type, b.content or "")
+            for b in tool_blocks
+        ))
         _is_repeat = _sig in _recent_call_sigs
         _recent_call_sigs.append(_sig)
         for _b in tool_blocks:
-            _call_freq[f"{_b.tool_type}:{(_b.content or '').strip()[:120]}"] += 1
+            _call_freq[_tool_call_signature(_b.tool_type, _b.content or "")] += 1
         # "Real" answer text = round text minus <think> blocks. Empty-think
         # rounds (just "<think>\n\n</think>" + a tool call) must not read as
         # progress, so strip think before checking.
@@ -5694,9 +5763,9 @@ async def stream_agent_loop(
             _stuck_rounds += 1
         else:
             _stuck_rounds = 0
-        # Runaway = the SAME exact call repeated an absurd number of times.
-        # Distinct calls to one tool (a real batch) are legitimate work, so we
-        # count identical call signatures, not raw per-tool-type totals.
+        # Distinct calls to one tool (a real batch) are legitimate work, so
+        # count identical signatures and near-identical search queries rather
+        # than raw per-tool-type totals.
         _runaway = _detect_runaway_call(_call_freq)
         if _stuck_rounds >= 4 or _runaway:
             reason = (f"calling {_runaway} with identical arguments over and over" if _runaway
@@ -5730,11 +5799,21 @@ async def stream_agent_loop(
             messages.append({
                 "role": "system",
                 "content": (
-                    "You're repeating tool calls without converging. STOP calling "
-                    "tools and end the turn one of two ways: (a) write your best "
-                    "final answer NOW from the information already gathered, or "
-                    "(b) if you're genuinely blocked, say plainly what's blocking "
-                    "you in a sentence or two." + _off_note
+                    (
+                        f"Repeated calls to {_runaway} did not converge. STOP "
+                        "calling tools. Use any confirmed results; otherwise tell "
+                        "the user plainly that the requested action could not be "
+                        "verified or completed. Do not claim success without "
+                        "evidence."
+                        if _runaway
+                        else
+                        "You're repeating tool calls without converging. STOP "
+                        "calling tools and end the turn one of two ways: (a) write "
+                        "your best final answer NOW from the information already "
+                        "gathered, or (b) if you're genuinely blocked, say plainly "
+                        "what's blocking you in a sentence or two."
+                    )
+                    + _off_note
                 ),
             })
             full_response += "\n\n"

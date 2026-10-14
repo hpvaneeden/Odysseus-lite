@@ -19,7 +19,11 @@ _MOCKED = [
 for _m in _MOCKED:
     sys.modules.setdefault(_m, MagicMock())
 
-from src.agent_loop import _detect_runaway_call
+from src.agent_loop import (
+    _MAX_REPEATED_TOOL_CALLS,
+    _detect_runaway_call,
+    _tool_call_signature,
+)
 
 
 def _freq(sigs):
@@ -42,12 +46,54 @@ def test_many_distinct_same_tool_is_not_runaway():
 
 
 def test_identical_call_repeated_is_runaway():
-    sigs = ['manage_calendar:{"action":"list_events"}'] * 15
+    sigs = ['manage_calendar:{"action":"list_events"}'] * _MAX_REPEATED_TOOL_CALLS
     assert _detect_runaway_call(_freq(sigs)) == 'manage_calendar'
 
 
 def test_below_threshold_is_not_runaway():
-    sigs = ['bash:ls'] * 14
+    sigs = ['bash:ls'] * (_MAX_REPEATED_TOOL_CALLS - 1)
+    assert _detect_runaway_call(_freq(sigs)) is None
+
+
+def test_json_argument_formatting_does_not_hide_repeated_calls():
+    sigs = [
+        _tool_call_signature("manage_skills", '{"action": "search", "query": "calendar skill"}'),
+        _tool_call_signature("manage_skills", '{"query":"calendar skill","action":"search"}'),
+        _tool_call_signature("manage_skills", '{ "action":"search", "query":"calendar skill" }'),
+    ]
+
+    assert len(set(sigs)) == 1
+    assert _detect_runaway_call(_freq(sigs)) == "manage_skills"
+
+
+def test_near_identical_search_queries_are_runaway():
+    sigs = [
+        _tool_call_signature(
+            "manage_skills",
+            '{"action":"search","query":"calendar event skill"}',
+        ),
+        _tool_call_signature(
+            "manage_skills",
+            '{"action":"search","query":"calendar events skill"}',
+        ),
+        _tool_call_signature(
+            "manage_skills",
+            '{"action":"search","query":"calendar event skills"}',
+        ),
+    ]
+
+    assert _detect_runaway_call(_freq(sigs)) == "manage_skills"
+
+
+def test_distinct_calendar_events_with_similar_titles_are_not_runaway():
+    sigs = [
+        _tool_call_signature(
+            "manage_calendar",
+            f'{{"action":"create_event","summary":"Dentist visit {n}"}}',
+        )
+        for n in range(18)
+    ]
+
     assert _detect_runaway_call(_freq(sigs)) is None
 
 

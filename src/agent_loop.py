@@ -1401,6 +1401,9 @@ def _assistant_requested_followup(messages: List[Dict]) -> bool:
     return False
 
 
+_AGENT_INTENT_MAX_CHARS = 1200
+
+
 def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, object]:
     """Classify only whether this turn deserves domain tool retrieval.
 
@@ -1410,17 +1413,30 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
     which domain rule packs get appended to the system prompt.
     """
     text = str(last_user or "").strip()
-    retry_continuation = _is_contextual_retry_continuation(messages, text)
-    continuation = _is_explicit_continuation(text) or _assistant_requested_followup(messages) or retry_continuation
-    retrieval_query = _recent_context_for_retrieval(messages) if continuation else text
+    # Retrieval and deterministic intent should emphasize the user's final
+    # instruction, not a long pasted document that may precede it.
+    intent_text = text[-_AGENT_INTENT_MAX_CHARS:]
+    retry_continuation = _is_contextual_retry_continuation(messages, intent_text)
+    continuation = (
+        _is_explicit_continuation(intent_text)
+        or _assistant_requested_followup(messages)
+        or retry_continuation
+    )
+    retrieval_query = (
+        _recent_context_for_retrieval(messages) if continuation else intent_text
+    )
     q = retrieval_query.lower()
 
-    if not text or bool(_LOW_SIGNAL_RE.match(text)) or _is_casual_low_signal(text):
+    if (
+        not intent_text
+        or bool(_LOW_SIGNAL_RE.match(intent_text))
+        or _is_casual_low_signal(intent_text)
+    ):
         return {
             "low_signal": True,
             "continuation": False,
             "domains": set(),
-            "retrieval_query": text,
+            "retrieval_query": intent_text,
         }
 
     domains: Set[str] = set()

@@ -37,6 +37,7 @@ try:
     from src.agent_loop import (
         _detect_admin_intent,
         _classify_agent_request,
+        _AGENT_INTENT_MAX_CHARS,
         _compute_final_metrics,
         _append_tool_results,
         _insert_before_latest_user,
@@ -72,6 +73,22 @@ def test_polish_internet_search_request_classifies_as_web():
 
     assert intent["low_signal"] is False
     assert "web" in intent["domains"]
+
+
+def test_long_message_retrieval_uses_final_instruction():
+    filler = "A long pasted reading about unrelated topics. " * 1500
+    instruction = (
+        "Do not summarise the reading above. I need two things from you: "
+        "1) Who is my dentist? 2) Create a calendar event titled CANARY-5 "
+        "for tomorrow at 9am."
+    )
+
+    intent = _classify_agent_request([], filler + instruction)
+
+    assert intent["low_signal"] is False
+    assert "notes_calendar_tasks" in intent["domains"]
+    assert intent["retrieval_query"] == (filler + instruction)[-_AGENT_INTENT_MAX_CHARS:]
+    assert intent["retrieval_query"].endswith(instruction)
 
 
 def test_insert_before_latest_user_places_context_before_last_user_turn():

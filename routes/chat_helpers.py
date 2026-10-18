@@ -260,6 +260,8 @@ def needs_auto_name(name: str) -> bool:
 
 async def auto_name_session(session_manager, sess):
     """Generate a short title for a session from its first user message."""
+    if os.getenv("ODYSSEUS_AUTO_NAME", "1").lower() in {"0", "false", "no", "off"}:
+        return  # local patch: disable LLM auto-titling (frees VRAM for image gen)
     try:
         from src.llm_core import llm_call_async
         from src.task_endpoint import resolve_task_endpoint

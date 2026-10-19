@@ -1179,7 +1179,7 @@ def run_post_response_tasks(
     extract_skills: bool = True,
     allow_background_extraction: bool = True,
 ):
-    """Fire background tasks after a completed response: memory extraction, webhooks, auto-name, skill extraction.
+    """Fire background tasks after a completed response: experience recording, memory extraction, webhooks, auto-name, skill extraction.
 
     Memory/skill extraction are queued to run *sequentially*, after the main
     completion streams have fully wound down — never
@@ -1194,6 +1194,28 @@ def run_post_response_tasks(
     turn's request too.
     """
     _extraction_jobs: list = []
+
+    # Experience recording (evolving social behaviour, slice 1): a small,
+    # deterministic, LLM-free capture of explicit feedback / corrections /
+    # outcome acknowledgements with message-id evidence, written to the
+    # canonical memory store. Queued FIRST among extraction jobs so a slow LLM
+    # extraction or audit further down (bounded at 120s each) cannot delay it.
+    # Shares every memory-privacy gate below, plus the auto_experience pref —
+    # default off while this layer is under development (opt in per user via
+    # PUT /api/prefs/auto_experience with {"value": true}).
+    if (
+        allow_background_extraction
+        and not incognito
+        and not compare_mode
+        and uprefs.get("memory_enabled", True)
+        and uprefs.get("auto_memory", True)
+        and uprefs.get("auto_experience", False)
+    ):
+        from services.memory.experience_recorder import record_experiences
+        _extraction_jobs.append(("experience", record_experiences(
+            sess, memory_manager, memory_vector,
+            owner=owner, session_id=session_id,
+        )))
 
     # Extract after each completed response. The extractor receives a bounded
     # recent transcript and deduplicates against this owner's saved memories.

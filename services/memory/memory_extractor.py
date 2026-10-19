@@ -119,6 +119,14 @@ AUDIT_SYSTEM_PROMPT = (
 AUDIT_INTERVAL = 5  # audit every N new memories added
 _extractions_since_audit = 0
 
+# Categories the facts-oriented audit must never merge, rewrite, or drop.
+# See audit_memories: experience records are linked event evidence — their
+# value is the provenance refs to persisted messages, which AUDIT_SYSTEM_PROMPT
+# never sees, so a "worthless entry" judgement or merge would silently destroy
+# behavioural evidence. They are excluded from the LLM payload entirely and
+# re-attached verbatim after the tidy.
+PROTECTED_AUDIT_CATEGORIES = frozenset({"experience"})
+
 
 def _message_text(message) -> str:
     content = getattr(message, "content", None)
@@ -582,13 +590,30 @@ async def audit_memories(
 
         before_count = len(existing)
 
+        # Partition out PROTECTED_AUDIT_CATEGORIES (experience records): the
+        # facts-oriented tidy can neither see, merge, rewrite, nor drop them —
+        # they are re-attached verbatim below. Owner scoping is preserved: with
+        # an owner set, `existing` holds only that owner's rows, so other
+        # tenants' protected rows never enter this path at all.
+        protected_entries = [
+            m for m in existing
+            if str(m.get("category") or "").strip().lower() in PROTECTED_AUDIT_CATEGORIES
+        ]
+        protected_ids = {m["id"] for m in protected_entries}
+        auditable = [m for m in existing if m.get("id") not in protected_ids]
+        if not auditable:
+            logger.info("Memory audit: nothing auditable (protected categories only)")
+            return {"before": before_count, "after": before_count}
+
         # Skip the LLM call entirely when this exact set of memories was
         # already audited — the previous tidy left them in a clean state
         # and nothing has changed since. Returns instantly so the UI shows
         # "Already clean" without spending 30-120s on a wasted LLM round.
-        # The fingerprint includes id+text+category; any add/edit/delete
-        # invalidates it and the audit runs normally.
-        current_fp = _fingerprint_entries(existing)
+        # The fingerprint covers id+text+category of the AUDITABLE slice only:
+        # any fact add/edit/delete invalidates it and the audit runs normally,
+        # while protected experience records neither invalidate the tidy state
+        # nor re-trigger a facts tidy.
+        current_fp = _fingerprint_entries(auditable)
         last_state = _load_tidy_state(memory_manager).get(owner or "") or {}
         if last_state.get("fingerprint") == current_fp:
             logger.info("Memory audit: state unchanged since last tidy — skipping LLM")
@@ -598,10 +623,11 @@ async def audit_memories(
                 "already_tidy": True,
             }
 
-        # Build payload: list of {id, text, category} for the LLM
+        # Build payload: list of {id, text, category} for the LLM.
+        # Protected (experience) entries are deliberately absent.
         memory_payload = [
             {"id": m["id"], "text": m["text"], "category": m.get("category", "fact")}
-            for m in existing
+            for m in auditable
         ]
 
         audit_messages = [
@@ -655,8 +681,10 @@ async def audit_memories(
             logger.error(f"Memory audit returned non-JSON: {text[:300]}")
             return {"before": before_count, "after": before_count, "error": "bad_json"}
 
-        # Build lookup of original entries by ID so we can preserve metadata
-        originals = {m["id"]: m for m in existing}
+        # Build lookup of original entries by ID so we can preserve metadata.
+        # Scoped to the auditable slice: a model-returned protected id can
+        # never match, so it is skipped as "unknown" instead of rewriting one.
+        originals = {m["id"]: m for m in auditable}
 
         final_entries = []
         for item in cleaned:
@@ -680,6 +708,9 @@ async def audit_memories(
 
             final_entries.append(entry)
 
+        # Re-attach protected entries verbatim — the tidy must never merge,
+        # rewrite, or drop linked experience evidence.
+        final_entries = final_entries + protected_entries
         after_count = len(final_entries)
 
         # Safety net against catastrophic over-deletion. A conservative tidy
@@ -729,9 +760,16 @@ async def audit_memories(
         if memory_vector and memory_vector.healthy:
             memory_vector.rebuild(saved_entries)
 
-        # Persist the post-tidy fingerprint so the next call short-circuits
-        # if nothing has changed in the meantime.
-        _save_tidy_state(memory_manager, owner, _fingerprint_entries(final_entries))
+        # Persist the post-tidy fingerprint of the AUDITABLE slice so it
+        # compares against the auditable-only fingerprint computed on entry;
+        # protected records stay out of tidy-state bookkeeping entirely.
+        _save_tidy_state(
+            memory_manager,
+            owner,
+            _fingerprint_entries(
+                [e for e in final_entries if e.get("id") not in protected_ids]
+            ),
+        )
 
         return {"before": before_count, "after": after_count}
 

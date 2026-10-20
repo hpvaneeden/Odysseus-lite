@@ -95,6 +95,45 @@ def _message_metadata(message) -> dict:
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _chat_transcript_markdown(session, session_id: str) -> str:
+    """Build a readable, refreshable transcript document for a chat session."""
+    title = str(getattr(session, "name", "") or "Untitled chat").strip()
+    model = str(getattr(session, "model", "") or "Unknown")
+    lines = [
+        f"# Chat transcript: {title}",
+        "",
+        f"- Session: `{session_id}`",
+        f"- Model: `{model}`",
+        "",
+        f"<!-- odysseus-chat-transcript:{session_id} -->",
+        "---",
+        "",
+    ]
+    for message in getattr(session, "history", []) or []:
+        role = _message_role(message)
+        if role not in {"user", "assistant"}:
+            continue
+        label = "You" if role == "user" else "Odysseus"
+        lines.extend([f"## {label}", "", _message_text(message), ""])
+        events = _message_metadata(message).get("tool_events") or []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            lines.extend([
+                "<details>",
+                "<summary>Tool interaction</summary>",
+                "",
+                "```json",
+                json.dumps(event, ensure_ascii=False, indent=2, default=str),
+                "```",
+                "",
+                "</details>",
+                "",
+            ])
+        lines.extend(["---", ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _reject_compact_during_active_run(session_id: str) -> None:
     from src import agent_runs
     if agent_runs.is_active(session_id):
@@ -928,6 +967,101 @@ def setup_session_routes(
             media_type="text/markdown",
             headers={"Content-Disposition": f"attachment; filename={out_name}"},
         )
+
+    @router.post("/session/{sid}/save-document")
+    def save_session_document(request: Request, sid: str):
+        """Save or refresh one owner-scoped Markdown transcript for a chat."""
+        from src.auth_helpers import require_privilege
+
+        user = require_privilege(request, "can_use_documents")
+        _verify_session_owner(request, sid, session_manager)
+        try:
+            session = session_manager.get_session(sid)
+        except KeyError:
+            raise HTTPException(404, f"Session {sid} not found")
+
+        content = _chat_transcript_markdown(session, sid)
+        if not any(_message_role(message) in {"user", "assistant"}
+                   for message in getattr(session, "history", []) or []):
+            raise HTTPException(400, "This chat has no messages to save")
+
+        title = f"Chat transcript — {str(getattr(session, 'name', '') or 'Untitled chat').strip()}"
+        marker = f"<!-- odysseus-chat-transcript:{sid} -->"
+        db = SessionLocal()
+        try:
+            # The marker makes repeated saves idempotent even if the document
+            # is renamed. session_id and the owner check keep the search scoped.
+            candidates = (
+                db.query(Document)
+                .filter(Document.session_id == sid)
+                .filter(Document.is_active == True)
+                .all()
+            )
+            doc = next((item for item in candidates
+                        if marker in (item.current_content or "")), None)
+            created = doc is None
+            changed = False
+            if doc is None:
+                doc = Document(
+                    id=str(uuid.uuid4()),
+                    session_id=sid,
+                    title=title,
+                    language="markdown",
+                    current_content=content,
+                    version_count=1,
+                    is_active=True,
+                    owner=user or getattr(session, "owner", None),
+                )
+                db.add(doc)
+                db.add(DocumentVersion(
+                    id=str(uuid.uuid4()),
+                    document_id=doc.id,
+                    version_number=1,
+                    content=content,
+                    summary="Saved chat transcript",
+                    source="user",
+                ))
+                changed = True
+            elif doc.current_content != content or doc.title != title:
+                version = (doc.version_count or 1) + 1
+                doc.current_content = content
+                doc.title = title
+                doc.version_count = version
+                db.add(DocumentVersion(
+                    id=str(uuid.uuid4()),
+                    document_id=doc.id,
+                    version_number=version,
+                    content=content,
+                    summary="Refreshed chat transcript",
+                    source="user",
+                ))
+                changed = True
+
+            if changed:
+                db.commit()
+                db.refresh(doc)
+                if created:
+                    try:
+                        from src.event_bus import fire_event
+                        fire_event("document_created", doc.owner)
+                    except Exception:
+                        logger.debug("chat transcript document event dispatch failed", exc_info=True)
+            return {
+                "id": doc.id,
+                "session_id": sid,
+                "title": doc.title,
+                "created": created,
+                "updated": changed and not created,
+            }
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception as e:
+            db.rollback()
+            logger.error("Failed to save chat transcript document: %s", e)
+            raise HTTPException(500, "Failed to save chat transcript document")
+        finally:
+            db.close()
     
     @router.post("/sessions/save")
     def sessions_save_now(request: Request):

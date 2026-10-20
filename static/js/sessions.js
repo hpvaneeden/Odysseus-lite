@@ -757,6 +757,33 @@ function createSessionItem(s) {
     }
   });
 
+  const saveDocumentItem = document.createElement('div');
+  saveDocumentItem.className = 'dropdown-item-compact';
+  saveDocumentItem.innerHTML = _icon('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>') + '<span>Save chat as document</span>';
+  saveDocumentItem.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    dropdown.style.display = 'none';
+    try {
+      const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(s.id)}/save-document`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      if (window.documentModule?.loadDocument) {
+        await window.documentModule.loadDocument(data.id);
+      }
+      uiModule.showToast(data.created
+        ? 'Chat saved as a document'
+        : data.updated
+          ? 'Chat transcript document updated'
+          : 'Chat transcript already up to date');
+    } catch (err) {
+      console.error('Save chat as document failed:', err);
+      uiModule.showError(err.message || 'Failed to save chat as a document');
+    }
+  });
+
   // Rename is already appended above (line 393)
 
   // "Select" — enter bulk select mode with this session pre-selected
@@ -783,6 +810,7 @@ function createSessionItem(s) {
   // Copy & Move to folder
   const folderItem = buildFolderSubmenu(s.id, s.folder, dropdown);
   dropdown.appendChild(copyItem);
+  dropdown.appendChild(saveDocumentItem);
   dropdown.appendChild(folderItem);
 
   // Separator before destructive actions

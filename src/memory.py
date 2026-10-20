@@ -2,13 +2,47 @@
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Callable
+from contextlib import contextmanager
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# Process-wide lock serialising every read-modify-write cycle on memory.json.
+# All writers (experience recorder, memory extractor/audit, memory routes,
+# ai_interaction, MCP server, claim_ownerless, increment_uses) acquire this
+# lock between load_all_for_update() and save() so a stale read can never
+# overwrite a concurrent write. Async writers never hold the lock across an
+# await (audit_memories uses two-phase locking: lock for load, release for the
+# LLM call, lock again for reload+merge+save).
+_MEMORY_WRITE_LOCK = threading.Lock()
+
+
+@contextmanager
+def memory_write_lock():
+    """Context manager for the process-wide memory write lock."""
+    _MEMORY_WRITE_LOCK.acquire()
+    try:
+        yield
+    finally:
+        _MEMORY_WRITE_LOCK.release()
+
+
+def memory_write_transaction(memory_manager, mutate: Callable[[List[Dict]], None]) -> List[Dict]:
+    """Atomically load-all-for-update, mutate in place, and save.
+
+    The entire cycle runs under the process-wide write lock, so concurrent
+    writers cannot interleave and clobber each other's changes.
+    """
+    with memory_write_lock():
+        entries = memory_manager.load_all_for_update()
+        mutate(entries)
+        memory_manager.save(entries)
+        return entries
 
 
 class MemoryStoreUnreadable(RuntimeError):
@@ -196,21 +230,22 @@ class MemoryManager:
     def claim_ownerless(self, owner: str):
         """Assign all ownerless memory entries to the given owner."""
         try:
-            entries = self.load_all_for_update()
+            with memory_write_lock():
+                entries = self.load_all_for_update()
+                changed = False
+                claimed = 0
+                for entry in entries:
+                    if not entry.get("owner"):
+                        entry["owner"] = owner
+                        changed = True
+                        claimed += 1
+                if changed:
+                    self.save(entries)
+                    logger.info("Claimed %d ownerless memories for %s", claimed, owner)
         except MemoryStoreUnreadable as e:
             # Skip the sweep rather than rewrite the store from an unknown view.
             logger.error("Skipping ownerless claim, memory store unreadable: %s", e)
             return
-        changed = False
-        claimed = 0
-        for entry in entries:
-            if not entry.get("owner"):
-                entry["owner"] = owner
-                changed = True
-                claimed += 1
-        if changed:
-            self.save(entries)
-            logger.info("Claimed %d ownerless memories for %s", claimed, owner)
     
     def _validate_entries(self, entries: List[Dict]) -> List[Dict]:
         """Ensure all entries have required fields."""
@@ -301,18 +336,19 @@ class MemoryManager:
             return
         id_set = set(ids)
         try:
-            entries = self.load_all_for_update()
+            with memory_write_lock():
+                entries = self.load_all_for_update()
+                changed = False
+                for e in entries:
+                    if e.get("id") in id_set:
+                        e["uses"] = int(e.get("uses", 0) or 0) + 1
+                        changed = True
+                if changed:
+                    self.save(entries)
         except MemoryStoreUnreadable as e:
             # Best-effort counter; never worth rewriting the store blind.
             logger.error("Skipping uses bump, memory store unreadable: %s", e)
             return
-        changed = False
-        for e in entries:
-            if e.get("id") in id_set:
-                e["uses"] = int(e.get("uses", 0) or 0) + 1
-                changed = True
-        if changed:
-            self.save(entries)
     
     def find_duplicates(self, text: str, entries: List[Dict] = None) -> List[Dict]:
         """Find duplicate memory entries based on text content."""

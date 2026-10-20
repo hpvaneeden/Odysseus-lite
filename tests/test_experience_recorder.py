@@ -732,7 +732,330 @@ def test_experience_additions_do_not_invalidate_tidy_state(tmp_path, monkeypatch
     assert {r["id"] for r in mgr.load(owner="alice")} == {"f1", "f2", "x1"}
 
 
+# ── Regression: experience records must survive concurrent audits ─────────────
 
+def _install_llm_async(monkeypatch, reply_coro_fn):
+    """Stub src.llm_core.llm_call_async, properly awaiting async reply functions.
+
+    Mirrors _install_llm but awaits coroutine replies so the stub can run
+    concurrent work while the audit/extractor is "awaiting" the LLM.
+    """
+    mod = types.ModuleType("src.llm_core")
+    state = {"calls": 0, "payloads": []}
+
+    async def llm_call_async(endpoint_url, model, messages, **kwargs):
+        state["calls"] += 1
+        state["payloads"].append(messages)
+        return await reply_coro_fn(messages)
+
+    mod.llm_call_async = llm_call_async
+    src_pkg = sys.modules.get("src") or types.ModuleType("src")
+    monkeypatch.setitem(sys.modules, "src", src_pkg)
+    monkeypatch.setitem(sys.modules, "src.llm_core", mod)
+    return state
+
+
+def test_audit_preserves_concurrent_experience_record(tmp_path, monkeypatch):
+    """Regression test: an experience record written while an audit is
+    awaiting its LLM response must survive the audit's save.
+
+    Interleaving:
+      1. Audit loads existing state (phase 1 read).
+      2. Audit awaits the LLM (yield point).
+      3. Experience recorder writes a new experience (concurrent write).
+      4. Audit resumes and saves — must not clobber step 3.
+    """
+    ext = _load_extractor()
+    rec = _load_recorder()
+    mgr = _seed(_FACTS, tmp_path)  # f1, f2 owned by alice
+
+    async def run_race():
+        audit_at_llm = asyncio.Event()
+        release_llm = asyncio.Event()
+
+        async def slow_llm(messages):
+            audit_at_llm.set()            # audit has reached the LLM await
+            await release_llm.wait()      # block until the test releases it
+            return _FACTS_REPLY            # facts-only reply
+
+        _install_llm_async(monkeypatch, slow_llm)
+
+        # Start audit as a concurrent task
+        audit_task = asyncio.create_task(
+            ext.audit_memories(mgr, None, "http://x", "m", None, owner="alice")
+        )
+
+        # Wait until audit is awaiting the LLM
+        await audit_at_llm.wait()
+
+        # --- CONCURRENT WRITE: record an experience while audit is awaiting ---
+        n = await rec.record_experiences(
+            _session(_TURN), mgr, None, owner="alice", session_id="sess-1",
+        )
+        assert n == 1, "experience recording should succeed during audit await"
+
+        # Release the audit's LLM call
+        release_llm.set()
+
+        # Wait for audit to complete
+        await audit_task
+
+        # The experience record must still exist — it must not have been
+        # clobbered by the audit's stale read-modify-write.
+        rows = {r["id"]: r for r in mgr.load(owner="alice")}
+        experience_ids = [rid for rid in rows if rid not in {"f1", "f2"}]
+        assert len(experience_ids) == 1, (
+            f"experience record was lost by the audit; rows={list(rows)}"
+        )
+        assert rows[experience_ids[0]]["category"] == "experience"
+
+    asyncio.run(run_race())
+
+
+def test_audit_preserves_concurrent_experience_from_other_session(tmp_path, monkeypatch):
+    """Same race, but the experience is recorded for a different session of
+    the same owner — the audit must not drop it either."""
+    ext = _load_extractor()
+    rec = _load_recorder()
+    mgr = _seed(_FACTS, tmp_path)
+
+    _TURN_OTHER = [
+        _msg("user", "That worked!", "u-2"),
+        _msg("assistant", "Glad it helped.", "a-2"),
+    ]
+
+    async def run_race():
+        audit_at_llm = asyncio.Event()
+        release_llm = asyncio.Event()
+
+        async def slow_llm(messages):
+            audit_at_llm.set()
+            await release_llm.wait()
+            return _FACTS_REPLY
+
+        _install_llm_async(monkeypatch, slow_llm)
+
+        audit_task = asyncio.create_task(
+            ext.audit_memories(mgr, None, "http://x", "m", None, owner="alice")
+        )
+        await audit_at_llm.wait()
+
+        n = await rec.record_experiences(
+            _session(_TURN_OTHER), mgr, None, owner="alice", session_id="sess-2",
+        )
+        assert n == 1
+
+        release_llm.set()
+        await audit_task
+
+        rows = {r["id"]: r for r in mgr.load(owner="alice")}
+        experience_ids = [rid for rid in rows if rid not in {"f1", "f2"}]
+        assert len(experience_ids) == 1, (
+            f"experience from other session was lost by the audit; rows={list(rows)}"
+        )
+
+    asyncio.run(run_race())
+
+
+# ── Priority 2: owner isolation during deduplication ────────────────────────
+
+def test_dedup_ownerless_request_does_not_scan_other_users(tmp_path):
+    """An ownerless recording must not deduplicate against another user's
+    private records. Evidence is session-scoped, so same session_id + db_id
+    under a different owner is a different event."""
+    rec = _load_recorder()
+    mgr = MemoryManager(str(tmp_path))
+
+    # Bob already recorded this evidence under his ownership
+    mgr.save([{
+        "id": "bob-1",
+        "text": "User confirmed the outcome worked.",
+        "owner": "bob",
+        "category": "experience",
+        "source": "experience",
+        "evidence": ["sess-1:u-1", "sess-1:a-1"],
+        "session_id": "sess-1",
+    }])
+
+    # Ownerless request (session also has no owner) with the same evidence
+    # must NOT be suppressed by bob's row.
+    ownerless_session = _session(_TURN, owner=None, sid="sess-1")
+    n = asyncio.run(rec.record_experiences(
+        ownerless_session, mgr, None, owner=None, session_id="sess-1",
+    ))
+    assert n == 1, "ownerless recording must not be suppressed by another user's record"
+
+    # Bob's row is untouched
+    assert len(mgr.load(owner="bob")) == 1
+    # The ownerless record was added
+    ownerless = [e for e in mgr.load_all() if e.get("owner") is None]
+    assert len(ownerless) == 1
+
+
+def test_recorder_receives_correct_owner_and_session_id(tmp_path):
+    """The owner and session_id passed to record_experiences are stored on the
+    entry and used for evidence scoping."""
+    rec = _load_recorder()
+    mgr = MemoryManager(str(tmp_path))
+
+    n = asyncio.run(rec.record_experiences(
+        _session(_TURN), mgr, None, owner="carol", session_id="sess-carol",
+    ))
+    assert n == 1
+
+    rows = mgr.load(owner="carol")
+    assert len(rows) == 1
+    entry = rows[0]
+    assert entry["owner"] == "carol"
+    assert entry["session_id"] == "sess-carol"
+    assert entry["evidence"] == ["sess-carol:u-1", "sess-carol:a-1"]
+
+    # Other owners see nothing
+    assert mgr.load(owner="dave") == []
+    # No ownerless entry was created (owner was explicitly set)
+    assert all(e.get("owner") is not None for e in mgr.load_all())
+
+
+def test_dedup_legacy_ownerless_records_explicit_policy(tmp_path):
+    """Legacy ownerless records are included in dedup when an owner is set.
+
+    This is the documented compatibility policy: when owner is set, dedup
+    scans own rows plus legacy ownerless rows. This prevents a user from
+    re-recording experiences that were previously saved ownerless (before
+    ownership was introduced)."""
+    rec = _load_recorder()
+    mgr = MemoryManager(str(tmp_path))
+
+    # Legacy ownerless experience (pre-ownership)
+    mgr.save([{
+        "id": "legacy-1",
+        "text": "User confirmed the outcome worked.",
+        "owner": None,
+        "category": "experience",
+        "source": "experience",
+        "evidence": ["sess-1:u-1", "sess-1:a-1"],
+        "session_id": "sess-1",
+    }])
+
+    # Alice recording the same evidence should be suppressed by the legacy row
+    n = asyncio.run(rec.record_experiences(
+        _session(_TURN), mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n == 0, "legacy ownerless record should suppress same-evidence recording"
+
+    # No new row added for alice
+    assert len(mgr.load(owner="alice")) == 0
+    assert len(mgr.load(owner=None)) == 1  # legacy row untouched
+
+
+def test_dedup_never_leaks_across_owners(tmp_path):
+    """Dedup compares evidence ids only — never text, never owner — so one
+    user's experience can never suppress another user's recording of their
+    own session's feedback."""
+    rec = _load_recorder()
+    mgr = MemoryManager(str(tmp_path))
+
+    # Bob's experience with identical description text but different evidence
+    mgr.save([{
+        "id": "bob-1",
+        "text": "User confirmed the outcome worked.",  # same text as alice's would be
+        "owner": "bob",
+        "category": "experience",
+        "source": "experience",
+        "evidence": ["sess-bob:u-99", "sess-bob:a-99"],  # different evidence
+        "session_id": "sess-bob",
+    }])
+
+    # Alice's recording of HER evidence must not be suppressed by bob's row,
+    # even though the description text is identical.
+    n = asyncio.run(rec.record_experiences(
+        _session(_TURN), mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n == 1, "identical text with different evidence must not suppress"
+
+    assert len(mgr.load(owner="alice")) == 1
+    assert len(mgr.load(owner="bob")) == 1
+
+
+# ── Wiring: correct owner and session_id reach the recorder ─────────────────
+
+def test_recorder_receives_correct_owner_and_session_id(tmp_path):
+    """The owner and session_id passed to record_experiences are stored on the
+    entry and used for evidence scoping."""
+    rec = _load_recorder()
+    mgr = MemoryManager(str(tmp_path))
+
+    n = asyncio.run(rec.record_experiences(
+        _session(_TURN), mgr, None, owner="carol", session_id="sess-carol",
+    ))
+    assert n == 1
+
+    rows = mgr.load(owner="carol")
+    assert len(rows) == 1
+    entry = rows[0]
+    assert entry["owner"] == "carol"
+    assert entry["session_id"] == "sess-carol"
+    assert entry["evidence"] == ["sess-carol:u-1", "sess-carol:a-1"]
+
+    # Other owners see nothing
+    assert mgr.load(owner="dave") == []
+    # No ownerless entry was created (owner was explicitly set)
+    assert all(e.get("owner") is not None for e in mgr.load_all())
+
+
+def test_experience_job_passes_owner_and_session_id(monkeypatch):
+    """The run_post_response_tasks wiring passes the effective owner and
+    session_id through to record_experiences."""
+    chat_helpers = _install_chat_helpers(monkeypatch)
+    _stub_job_modules(monkeypatch)
+
+    captured = {"owner": None, "session_id": None, "names": []}
+
+    def fake_record_experiences(session, memory_manager, memory_vector, *,
+                                owner=None, session_id=None):
+        """Called at coroutine-creation time inside run_post_response_tasks."""
+        captured["owner"] = owner
+        captured["session_id"] = session_id
+
+        async def _coro():
+            return 1
+        return _coro()
+
+    rec_mod = types.ModuleType("services.memory.experience_recorder")
+    rec_mod.record_experiences = fake_record_experiences
+    monkeypatch.setitem(sys.modules, "services.memory.experience_recorder", rec_mod)
+
+    def fake_runner(session_id, jobs):
+        captured["names"] = [name for name, _ in jobs]
+        for _, job in jobs:
+            job.close()
+        return None
+
+    monkeypatch.setattr(chat_helpers, "_run_extraction_jobs_sequentially", fake_runner)
+    monkeypatch.setattr(chat_helpers, "_spawn_bg", lambda coro: None)
+    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
+
+    sess = SimpleNamespace(
+        endpoint_url="http://localhost:1234/v1",
+        model="test-model",
+        headers={},
+        history=[object()] * 8,
+        name="My session title",
+    )
+    session_manager = SimpleNamespace(save_sessions=lambda: None)
+    chat_helpers.run_post_response_tasks(
+        sess, session_manager, "sess-wiring", "hello", "hi there", None,
+        {"auto_memory": True, "auto_skills": True, "auto_experience": True},
+        memory_manager=MagicMock(), memory_vector=MagicMock(),
+        webhook_manager=None,
+        agent_rounds=3, agent_tool_calls=3, skills_manager=MagicMock(),
+        owner="wiring-owner",
+        extract_skills=True,
+    )
+
+    assert captured["names"] == ["experience", "memory", "skill"]
+    assert captured["owner"] == "wiring-owner"
+    assert captured["session_id"] == "sess-wiring"
 
 
 

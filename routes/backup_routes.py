@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from core.middleware import require_admin
-from services.memory import MemoryStoreUnreadable
+from services.memory import MemoryStoreUnreadable, memory_write_lock
 from src.auth_helpers import get_current_user
 from src.settings import load_settings, save_settings, load_features, save_features
 
@@ -80,31 +80,34 @@ def setup_backup_routes(memory_manager, preset_manager, skills_manager) -> APIRo
             # Strict load: importing on top of an unreadable store would write
             # only the incoming rows back and drop everything already saved.
             try:
-                existing = memory_manager.load_all_for_update()
+                with memory_write_lock():
+                    existing = memory_manager.load_all_for_update()
+
+                    # Dedup against THIS user's own memories only. Using every
+                    # tenant's rows (load_all) meant a memory whose text matched
+                    # any other user's was silently skipped, so the importing
+                    # user lost their own data. The full store is still saved
+                    # back below.
+                    existing_texts = {e.get("text", "").strip().lower()
+                                      for e in existing if e.get("owner") == user}
+                    added = 0
+                    for mem in body["memories"]:
+                        if not isinstance(mem, dict) or not mem.get("text"):
+                            continue
+                        if mem["text"].strip().lower() in existing_texts:
+                            continue  # skip duplicates
+                        # Assign owner when auth is enabled
+                        if user and not mem.get("owner"):
+                            mem["owner"] = user
+                        existing.append(mem)
+                        existing_texts.add(mem["text"].strip().lower())
+                        added += 1
+                    memory_manager.save(existing)
             except MemoryStoreUnreadable as e:
                 logger.error("Refusing to import memories: %s", e)
                 raise HTTPException(
                     503, "Memory store is temporarily unreadable — nothing was imported."
                 )
-            # Dedup against THIS user's own memories only. Using every tenant's
-            # rows (load_all) meant a memory whose text matched any other
-            # user's was silently skipped, so the importing user lost their own
-            # data. The full store is still saved back below.
-            existing_texts = {e.get("text", "").strip().lower()
-                              for e in existing if e.get("owner") == user}
-            added = 0
-            for mem in body["memories"]:
-                if not isinstance(mem, dict) or not mem.get("text"):
-                    continue
-                if mem["text"].strip().lower() in existing_texts:
-                    continue  # skip duplicates
-                # Assign owner when auth is enabled
-                if user and not mem.get("owner"):
-                    mem["owner"] = user
-                existing.append(mem)
-                existing_texts.add(mem["text"].strip().lower())
-                added += 1
-            memory_manager.save(existing)
             imported.append(f"{added} memories")
 
         # ── Skills ──

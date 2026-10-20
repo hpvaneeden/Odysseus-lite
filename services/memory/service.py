@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import os
 
-from .memory import MemoryManager
+from .memory import MemoryManager, memory_write_lock
 from .memory_vector import MemoryVectorStore
 from src.memory_provider import MemoryRecord, NativeMemoryProvider
 from src.constants import DATA_DIR
@@ -115,12 +115,13 @@ class MemoryService:
 
     def delete(self, memory_id: str) -> bool:
         """Delete a memory by ID."""
-        memories = self.manager.load_all()
-        remaining = [m for m in memories if m.get("id") != memory_id]
-        if len(remaining) == len(memories):
-            return False
+        with memory_write_lock():
+            memories = self.manager.load_all()
+            remaining = [m for m in memories if m.get("id") != memory_id]
+            if len(remaining) == len(memories):
+                return False
 
-        self.manager.save(remaining)
-        if self.vector_store and self.vector_store.healthy:
-            self.vector_store.remove(memory_id)
-        return True
+            self.manager.save(remaining)
+            if self.vector_store and self.vector_store.healthy:
+                self.vector_store.remove(memory_id)
+            return True

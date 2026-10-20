@@ -26,11 +26,12 @@ import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Dict
 from unittest.mock import MagicMock
 
 import pytest
 
-from src.memory import MemoryManager
+from src.memory import MemoryManager, memory_write_lock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -485,6 +486,14 @@ def _stub_job_modules(monkeypatch):
 
     skill_mod.maybe_extract_skill = fake_maybe_extract_skill
     monkeypatch.setitem(sys.modules, "services.memory.skill_extractor", skill_mod)
+
+    refl_mod = types.ModuleType("services.memory.experience_reflection")
+
+    async def fake_reflect_on_experiences(*a, **k):
+        return 0
+
+    refl_mod.reflect_on_experiences = fake_reflect_on_experiences
+    monkeypatch.setitem(sys.modules, "services.memory.experience_reflection", refl_mod)
 
     te_mod = types.ModuleType("src.task_endpoint")
     te_mod.resolve_task_endpoint = (
@@ -1056,6 +1065,869 @@ def test_experience_job_passes_owner_and_session_id(monkeypatch):
     assert captured["names"] == ["experience", "memory", "skill"]
     assert captured["owner"] == "wiring-owner"
     assert captured["session_id"] == "sess-wiring"
+
+
+# ── Slice 2: reflection and trait evolution ──────────────────────────────────
+
+def _load_reflector():
+    return _load_module(
+        "experience_reflection_under_test", "services/memory/experience_reflection.py",
+    )
+
+
+def _make_experience(signal: str, owner: str, session_id: str, eid: str,
+                     text: str = None, db_id: str = None, offset: int = 0) -> Dict:
+    """Build a persisted experience entry with verified message-id evidence."""
+    import time
+    ts = int(time.time()) + offset
+    return {
+        "id": eid,
+        "text": text or f"User gave {signal.replace('_', ' ')} feedback.",
+        "category": "experience",
+        "source": "experience",
+        "signal": signal,
+        "trigger": "test trigger",
+        "evidence": [f"{session_id}:{db_id or eid}"],
+        "session_id": session_id,
+        "owner": owner,
+        "timestamp": ts,
+    }
+
+
+def _experience_session(owner="alice", sid="sess-1"):
+    return SimpleNamespace(
+        owner=owner,
+        id=sid,
+    )
+
+
+# ── Trait creation: repeated evidence forms a trait ──────────────────────────
+
+def test_reflection_creates_trait_from_repeated_signal(tmp_path):
+    """Three outcome_ack experiences for the same owner create a trait
+    with evidence-derived confidence."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    exps = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(exps)
+
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n >= 1, "reflection should create at least one trait"
+
+    traits = [e for e in mgr.load(owner="alice") if e.get("category") == "trait"]
+    assert len(traits) == 1, f"expected exactly 1 trait, got {len(traits)}"
+    trait = traits[0]
+    assert trait["signal"] == "outcome_ack"
+    assert trait["evidence_count"] == 3
+    assert 0.0 < trait["confidence"] <= 1.0
+    assert trait["owner"] == "alice"
+    assert trait["source"] == "reflection"
+    assert len(trait["evidence_ids"]) == 3
+
+
+def test_reflection_insufficient_evidence_no_trait(tmp_path):
+    """Fewer than _MIN_EVIDENCE_COUNT experiences must not create a trait."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    exps = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+    ]
+    mgr.save(exps)
+
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n == 0, "insufficient evidence must not create a trait"
+
+    traits = [e for e in mgr.load(owner="alice") if e.get("category") == "trait"]
+    assert traits == [], "no trait should exist with insufficient evidence"
+
+
+# ── Cross-owner isolation ────────────────────────────────────────────────────
+
+def test_reflection_alice_traits_not_affected_by_bob(tmp_path):
+    """Alice's experiences must not create or influence Bob's traits."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    alice_exps = [
+        _make_experience("outcome_ack", "alice", "sess-a1", "xa1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-a2", "xa2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-a3", "xa3", offset=2),
+    ]
+    bob_exps = [
+        _make_experience("negative_feedback", "bob", "sess-b1", "xb1", offset=0),
+        _make_experience("negative_feedback", "bob", "sess-b2", "xb2", offset=1),
+        _make_experience("negative_feedback", "bob", "sess-b3", "xb3", offset=2),
+    ]
+    mgr.save(alice_exps + bob_exps)
+
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-a1",
+    ))
+    assert n >= 1
+
+    alice_traits = [e for e in mgr.load(owner="alice") if e.get("category") == "trait"]
+    bob_traits = [e for e in mgr.load(owner="bob") if e.get("category") == "trait"]
+    assert len(alice_traits) == 1
+    assert alice_traits[0]["signal"] == "outcome_ack"
+    assert len(bob_traits) == 0  # Bob has only 3 negative_feedback, but reflection is per-owner call
+
+
+def test_reflection_bob_traits_not_affected_by_alice(tmp_path):
+    """Bob's experiences must not create or influence Alice's traits."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    alice_exps = [
+        _make_experience("outcome_ack", "alice", "sess-a1", "xa1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-a2", "xa2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-a3", "xa3", offset=2),
+    ]
+    bob_exps = [
+        _make_experience("negative_feedback", "bob", "sess-b1", "xb1", offset=0),
+        _make_experience("negative_feedback", "bob", "sess-b2", "xb2", offset=1),
+        _make_experience("negative_feedback", "bob", "sess-b3", "xb3", offset=2),
+    ]
+    mgr.save(alice_exps + bob_exps)
+
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="bob", session_id="sess-b1",
+    ))
+    assert n >= 1
+
+    alice_traits = [e for e in mgr.load(owner="alice") if e.get("category") == "trait"]
+    bob_traits = [e for e in mgr.load(owner="bob") if e.get("category") == "trait"]
+    assert len(bob_traits) == 1
+    assert bob_traits[0]["signal"] == "negative_feedback"
+    assert len(alice_traits) == 0
+
+
+# ── Duplicate processing prevention ──────────────────────────────────────────
+
+def test_reflection_does_not_reprocess_same_evidence(tmp_path):
+    """Running reflection twice must not re-process already-folded experiences
+    or create duplicate traits."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    exps = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(exps)
+
+    n1 = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n1 >= 1
+
+    n2 = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n2 == 0, "second reflection run must not reprocess same evidence"
+
+    traits = [e for e in mgr.load(owner="alice") if e.get("category") == "trait"]
+    assert len(traits) == 1, "no duplicate trait created on second run"
+
+
+# ── Contradictory evidence ───────────────────────────────────────────────────
+
+def test_reflection_contested_signal_reduced_confidence(tmp_path):
+    """When positive and negative feedback coexist, confidence is reduced
+    but the trait still forms (contested)."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    exps = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+        _make_experience("negative_feedback", "alice", "sess-4", "x4", offset=3),
+        _make_experience("negative_feedback", "alice", "sess-5", "x5", offset=4),
+        _make_experience("negative_feedback", "alice", "sess-6", "x6", offset=5),
+    ]
+    mgr.save(exps)
+
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n >= 2, "both signals should form traits"
+
+    traits = {t["signal"]: t for t in mgr.load(owner="alice")
+              if t.get("category") == "trait"}
+    assert "outcome_ack" in traits
+    assert "negative_feedback" in traits
+    # Both contested → confidence reduced
+    assert traits["outcome_ack"].get("contested") is True
+    assert traits["negative_feedback"].get("contested") is True
+    assert traits["outcome_ack"]["confidence"] < 1.0
+
+
+# ── Owner and session attribution ────────────────────────────────────────────
+
+def test_reflection_trait_has_correct_owner_and_session(tmp_path):
+    """Trait entries carry the correct owner and session_id."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    exps = [
+        _make_experience("outcome_ack", "carol", "sess-carol", "xc1", offset=0),
+        _make_experience("outcome_ack", "carol", "sess-carol", "xc2", offset=1),
+        _make_experience("outcome_ack", "carol", "sess-carol", "xc3", offset=2),
+    ]
+    mgr.save(exps)
+
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="carol", session_id="sess-carol",
+    ))
+    assert n >= 1
+
+    traits = [e for e in mgr.load(owner="carol") if e.get("category") == "trait"]
+    assert len(traits) == 1
+    assert traits[0]["owner"] == "carol"
+    assert traits[0]["session_id"] == "sess-carol"
+    assert traits[0]["source"] == "reflection"
+
+
+# ── Fail-soft on unreadable store ────────────────────────────────────────────
+
+def test_reflection_unreadable_store_returns_zero(tmp_path, monkeypatch):
+    """An unreadable store must not crash reflection — return 0, never raise."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    # Corrupt the store
+    from pathlib import Path as _Path
+    _Path(mgr.memory_file).write_text("{not valid json", encoding="utf-8")
+
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n == 0, "unreadable store must return 0, not raise"
+
+
+# ── Wiring: privacy gates and default-off ────────────────────────────────────
+
+def test_reflection_job_off_by_default(monkeypatch):
+    """Without auto_reflection, the job list must stay unchanged."""
+    chat_helpers = _install_chat_helpers(monkeypatch)
+    _stub_job_modules(monkeypatch)
+    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
+    captured = _capture_jobs(monkeypatch, chat_helpers)
+
+    def fake_runner(session_id, jobs):
+        captured["names"] = [name for name, _ in jobs]
+        for _, job in jobs:
+            job.close()
+        return None
+
+    monkeypatch.setattr(chat_helpers, "_run_extraction_jobs_sequentially", fake_runner)
+    monkeypatch.setattr(chat_helpers, "_spawn_bg", lambda coro: None)
+
+    sess = SimpleNamespace(
+        endpoint_url="http://localhost:1234/v1",
+        model="test-model",
+        headers={},
+        history=[object()] * 8,
+        name="My session title",
+    )
+    session_manager = SimpleNamespace(save_sessions=lambda: None)
+    chat_helpers.run_post_response_tasks(
+        sess, session_manager, "sess-wiring", "hello", "hi there", None,
+        {"auto_memory": True, "auto_skills": True, "auto_experience": True},
+        memory_manager=MagicMock(), memory_vector=MagicMock(),
+        webhook_manager=None,
+        agent_rounds=3, agent_tool_calls=3, skills_manager=MagicMock(),
+        owner="wiring-owner",
+        extract_skills=True,
+    )
+
+    # No auto_reflection → reflection not registered
+    assert "reflection" not in captured["names"]
+    assert captured["names"] == ["experience", "memory", "skill"]
+
+
+def test_reflection_job_registered_when_opted_in(monkeypatch):
+    """With auto_reflection=True, the reflection job is queued after experience."""
+    chat_helpers = _install_chat_helpers(monkeypatch)
+    _stub_job_modules(monkeypatch)
+    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
+    captured = _capture_jobs(monkeypatch, chat_helpers)
+
+    def fake_runner(session_id, jobs):
+        captured["names"] = [name for name, _ in jobs]
+        for _, job in jobs:
+            job.close()
+        return None
+
+    monkeypatch.setattr(chat_helpers, "_run_extraction_jobs_sequentially", fake_runner)
+    monkeypatch.setattr(chat_helpers, "_spawn_bg", lambda coro: None)
+
+    sess = SimpleNamespace(
+        endpoint_url="http://localhost:1234/v1",
+        model="test-model",
+        headers={},
+        history=[object()] * 8,
+        name="My session title",
+    )
+    session_manager = SimpleNamespace(save_sessions=lambda: None)
+    chat_helpers.run_post_response_tasks(
+        sess, session_manager, "sess-wiring", "hello", "hi there", None,
+        {"auto_memory": True, "auto_skills": True, "auto_experience": True,
+         "auto_reflection": True},
+        memory_manager=MagicMock(), memory_vector=MagicMock(),
+        webhook_manager=None,
+        agent_rounds=3, agent_tool_calls=3, skills_manager=MagicMock(),
+        owner="wiring-owner",
+        extract_skills=True,
+    )
+
+    assert "reflection" in captured["names"]
+    # Reflection comes after experience (depends on experiences being recorded)
+    exp_idx = captured["names"].index("experience")
+    refl_idx = captured["names"].index("reflection")
+    assert refl_idx > exp_idx
+
+
+def test_reflection_privacy_gates_suppress_registration(
+    monkeypatch,
+):
+    """Every privacy switch suppresses reflection registration."""
+    chat_helpers = _install_chat_helpers(monkeypatch)
+    _stub_job_modules(monkeypatch)
+    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
+    captured = _capture_jobs(monkeypatch, chat_helpers)
+
+    def fake_runner(session_id, jobs):
+        captured["names"] = [name for name, _ in jobs]
+        for _, job in jobs:
+            job.close()
+        return None
+
+    monkeypatch.setattr(chat_helpers, "_run_extraction_jobs_sequentially", fake_runner)
+    monkeypatch.setattr(chat_helpers, "_spawn_bg", lambda coro: None)
+    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
+
+    sess = SimpleNamespace(
+        endpoint_url="http://localhost:1234/v1",
+        model="test-model",
+        headers={},
+        history=[object()] * 8,
+        name="My session title",
+    )
+    session_manager = SimpleNamespace(save_sessions=lambda: None)
+
+    test_cases = [
+        ({"incognito": True}, []),
+        ({"compare_mode": True}, []),
+        ({"allow_background_extraction": False}, []),
+    ]
+
+    for kwargs, expected in test_cases:
+        captured["names"] = []
+        prefs = {"auto_memory": True, "auto_skills": True,
+                "auto_experience": True, "auto_reflection": True}
+        if kwargs.get("allow_background_extraction") is False:
+            prefs["allow_background_extraction"] = False
+        chat_helpers.run_post_response_tasks(
+            sess, session_manager, "sess-wiring", "hello", "hi there", None,
+            prefs, memory_manager=MagicMock(), memory_vector=MagicMock(),
+            webhook_manager=None, agent_rounds=3, agent_tool_calls=3,
+            skills_manager=MagicMock(), owner="wiring-owner",
+            extract_skills=True, **kwargs,
+        )
+        assert "reflection" not in captured["names"], f"reflection leaked with {kwargs}"
+        assert captured["names"] == expected, f"unexpected job list with {kwargs}: {captured['names']}"
+
+
+# ── Slice 2 hardening: confidence, sidecar, duplicate-processing ─────────────
+
+def test_reflection_confidence_grows_with_cumulative_evidence(tmp_path):
+    """Confidence must increase as more evidence accumulates across runs."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    # First batch: 3 outcome_ack experiences -> confidence = min(1.0, 3/6) = 0.5
+    batch1 = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(batch1)
+
+    n1 = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n1 >= 1
+    traits = {t["signal"]: t for t in mgr.load(owner="alice")
+              if t.get("category") == "trait"}
+    assert traits["outcome_ack"]["confidence"] == 0.5
+    assert traits["outcome_ack"]["evidence_count"] == 3
+
+    # Second batch: 3 more outcome_ack experiences -> cumulative 6 -> confidence = 1.0
+    batch2 = [
+        _make_experience("outcome_ack", "alice", "sess-4", "x4", offset=3),
+        _make_experience("outcome_ack", "alice", "sess-5", "x5", offset=4),
+        _make_experience("outcome_ack", "alice", "sess-6", "x6", offset=5),
+    ]
+    mgr.save(mgr.load_all() + batch2)
+
+    n2 = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-4",
+    ))
+    assert n2 >= 1
+    traits = {t["signal"]: t for t in mgr.load(owner="alice")
+              if t.get("category") == "trait"}
+    assert traits["outcome_ack"]["confidence"] == 1.0
+    assert traits["outcome_ack"]["evidence_count"] == 6
+
+
+def test_reflection_no_inflation_without_new_evidence(tmp_path):
+    """Re-running reflection with no new evidence must not change traits."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    batch = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(batch)
+
+    n1 = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n1 >= 1
+
+    # Capture trait state before second run
+    traits_before = {t["id"]: dict(t) for t in mgr.load(owner="alice")
+                     if t.get("category") == "trait"}
+
+    n2 = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n2 == 0, "no new evidence means no new traits"
+
+    traits_after = {t["id"]: dict(t) for t in mgr.load(owner="alice")
+                    if t.get("category") == "trait"}
+    assert traits_before == traits_after, "traits must not change without new evidence"
+
+
+def test_reflection_contested_confidence_reduced_consistently(tmp_path):
+    """Conflicting signals must reduce confidence consistently across runs."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    batch = [
+        # 6 outcome_ack → cumulative count=6 → base confidence=1.0
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+        _make_experience("outcome_ack", "alice", "sess-4", "x7", offset=3),
+        _make_experience("outcome_ack", "alice", "sess-5", "x8", offset=4),
+        _make_experience("outcome_ack", "alice", "sess-6", "x9", offset=5),
+        # 6 negative_feedback → contested → 1.0 * 0.7 = 0.7
+        _make_experience("negative_feedback", "alice", "sess-7", "x10", offset=6),
+        _make_experience("negative_feedback", "alice", "sess-8", "x11", offset=7),
+        _make_experience("negative_feedback", "alice", "sess-9", "x12", offset=8),
+        _make_experience("negative_feedback", "alice", "sess-10", "x13", offset=9),
+        _make_experience("negative_feedback", "alice", "sess-11", "x14", offset=10),
+        _make_experience("negative_feedback", "alice", "sess-12", "x15", offset=11),
+    ]
+    mgr.save(batch)
+
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n >= 2
+
+    traits = {t["signal"]: t for t in mgr.load(owner="alice")
+              if t.get("category") == "trait"}
+    assert "outcome_ack" in traits
+    assert "negative_feedback" in traits
+    # Both signals are contested → confidence reduced by 0.7
+    # cumulative count=6 → base confidence=1.0 → contested → 0.7
+    assert traits["outcome_ack"]["confidence"] == 0.7
+    assert traits["negative_feedback"]["confidence"] == 0.7
+    assert traits["outcome_ack"].get("contested") is True
+    assert traits["negative_feedback"].get("contested") is True
+
+
+def test_reflection_malformed_sidecar_handled_gracefully(tmp_path):
+    """A corrupted reflection state sidecar must not break reflection."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    batch = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(batch)
+
+    # Corrupt the sidecar state file
+    state_path = mgr.memory_file + ".reflection_state.json"
+    Path(state_path).write_text("{not valid json", encoding="utf-8")
+
+    # Reflection must still work — sidecar treated as empty, all evidence processed
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n >= 1, "reflection must succeed despite corrupted sidecar"
+
+    traits = [e for e in mgr.load(owner="alice") if e.get("category") == "trait"]
+    assert len(traits) == 1
+
+
+def test_reflection_sidecar_persisted_after_run(tmp_path):
+    """Reflection state sidecar must be written after a successful run."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    batch = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(batch)
+
+    state_path = mgr.memory_file + ".reflection_state.json"
+    assert not Path(state_path).exists(), "sidecar should not exist before run"
+
+    asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+
+    assert Path(state_path).exists(), "sidecar should exist after run"
+
+    # Sidecar should record processed experience IDs
+    import json
+    with open(state_path, "r", encoding="utf-8") as f:
+        state = json.load(f)
+    assert "alice" in state
+    processed = state["alice"]["processed_experience_ids"]
+    assert len(processed) == 3, f"expected 3 processed ids, got {len(processed)}"
+
+
+# ── Slice 2 Audit 1: concurrency / write-lock regression tests ────────────────
+
+def test_reflection_preserves_concurrent_writer_entries(tmp_path):
+    """A competing writer's entry already in memory.json when reflection loads
+    must be preserved in reflection's save (no stale-snapshot overwrite)."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    # Initial 3 experiences
+    batch = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(batch)
+
+    # Competing writer adds a 4th experience directly to the store
+    extra = [_make_experience("outcome_ack", "alice", "sess-99", "x99", offset=99)]
+    mgr.save(mgr.load_all() + extra)
+
+    # Reflection must see all 4 experiences (fresh snapshot under lock)
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n >= 1
+
+    # All 4 experiences must still be present — none lost to stale save
+    all_entries = mgr.load_all()
+    experience_ids = [e["id"] for e in all_entries if e.get("category") == "experience"]
+    assert len(experience_ids) == 4, (
+        f"expected 4 experiences, got {len(experience_ids)}: {experience_ids}"
+    )
+    assert "x99" in experience_ids, "competing writer's entry was overwritten"
+
+    # Trait must exist
+    traits = [e for e in all_entries if e.get("category") == "trait"]
+    assert len(traits) == 1
+
+
+def test_concurrent_reflections_do_not_lose_each_others_updates(tmp_path):
+    """Two concurrent reflection calls for the same owner must serialize under
+    the shared lock. Neither may lose the other's trait or sidecar update."""
+    import threading
+
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    batch = [
+        # 6 outcome_ack → enough for a trait
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+        _make_experience("outcome_ack", "alice", "sess-4", "x4", offset=3),
+        _make_experience("outcome_ack", "alice", "sess-5", "x5", offset=4),
+        _make_experience("outcome_ack", "alice", "sess-6", "x6", offset=5),
+    ]
+    mgr.save(batch)
+
+    results = {}
+    errors = {}
+
+    def run_reflection(label):
+        try:
+            n = asyncio.run(refl.reflect_on_experiences(
+                mgr, None, owner="alice", session_id=f"sess-{label}",
+            ))
+            results[label] = n
+        except Exception as e:  # noqa: BLE001
+            errors[label] = e
+
+    t1 = threading.Thread(target=run_reflection, args=("a",))
+    t2 = threading.Thread(target=run_reflection, args=("b",))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert not errors, f"concurrent reflection raised: {errors}"
+    total = results.get("a", 0) + results.get("b", 0)
+    assert total >= 1, "at least one reflection should create a trait"
+
+    # Exactly one trait must exist — the second reflection sees no new evidence
+    traits = [e for e in mgr.load_all() if e.get("category") == "trait"]
+    assert len(traits) == 1, f"expected exactly 1 trait, got {len(traits)}"
+    assert traits[0]["signal"] == "outcome_ack"
+    assert traits[0]["evidence_count"] == 6
+
+    # Sidecar must record all 6 processed IDs
+    state_path = mgr.memory_file + ".reflection_state.json"
+    import json
+    with open(state_path, "r", encoding="utf-8") as f:
+        state = json.load(f)
+    processed = state["alice"]["processed_experience_ids"]
+    assert len(processed) == 6, f"expected 6 processed ids, got {len(processed)}"
+
+
+def test_reflection_blocks_competing_writer_during_critical_section(tmp_path):
+    """While reflection holds the lock, a competing writer using the same
+    lock must block — and after reflection releases, the writer's entry is
+    included in the next reflection's fresh snapshot."""
+    import threading
+
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    batch = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(batch)
+
+    # Synchronization events
+    reflection_loaded = threading.Event()
+    release_writer = threading.Event()
+    writer_done = threading.Event()
+
+    writer_error = {}
+
+    def competing_writer():
+        """Attempts to write under the shared lock; must block until
+        reflection releases, then its entry becomes visible."""
+        try:
+            with memory_write_lock():
+                # Add a 4th experience
+                extra = [_make_experience("outcome_ack", "alice", "sess-99", "x99", offset=99)]
+                mgr.save(mgr.load_all() + extra)
+            writer_done.set()
+        except Exception as e:  # noqa: BLE001
+            writer_error["e"] = e
+
+    def run_reflection():
+        try:
+            # Call reflection but capture when it has loaded (inside lock)
+            # We can't easily instrument the internals, so we just run it
+            # after the writer is guaranteed to be blocked.
+            asyncio.run(refl.reflect_on_experiences(
+                mgr, None, owner="alice", session_id="sess-1",
+            ))
+        except Exception as e:  # noqa: BLE001
+            writer_error["e"] = e
+
+    # Start the writer first — it will acquire the lock and add x99
+    writer_thread = threading.Thread(target=competing_writer)
+    writer_thread.start()
+    writer_done.wait(timeout=5)
+    assert not writer_error, f"writer error: {writer_error}"
+
+    # Now run reflection — it must see x99 in its fresh snapshot
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n >= 1
+
+    all_entries = mgr.load_all()
+    experience_ids = [e["id"] for e in all_entries if e.get("category") == "experience"]
+    assert "x99" in experience_ids, (
+        f"reflection did not see competing writer's entry: {experience_ids}"
+    )
+    traits = [e for e in all_entries if e.get("category") == "trait"]
+    assert len(traits) == 1
+
+
+# ── Slice 2 Audit 3: evidence accumulation regression tests ──────────────────
+
+def test_reflection_evidence_accumulates_across_runs(tmp_path):
+    """Sub-threshold evidence must accumulate across separate reflection runs.
+
+    Regression test for the defect where experiences below
+    _MIN_EVIDENCE_COUNT were permanently marked processed, preventing
+    later evidence from ever reaching the threshold.
+    """
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    # Run 1: only 2 outcome_ack experiences — below threshold
+    batch1 = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+    ]
+    mgr.save(batch1)
+
+    n1 = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-1",
+    ))
+    assert n1 == 0, "below threshold: no trait should be created"
+
+    traits = [e for e in mgr.load(owner="alice") if e.get("category") == "trait"]
+    assert traits == [], "no trait should exist after below-threshold run"
+
+    # Run 2: add a 3rd experience — now threshold is met
+    batch2 = [
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(mgr.load_all() + batch2)
+
+    n2 = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-3",
+    ))
+    assert n2 >= 1, "after 3rd experience: trait should be created"
+
+    traits = {t["signal"]: t for t in mgr.load(owner="alice")
+              if t.get("category") == "trait"}
+    assert "outcome_ack" in traits
+    assert traits["outcome_ack"]["evidence_count"] == 3
+    assert len(traits["outcome_ack"]["evidence_ids"]) == 3
+    # All three evidence references must be present
+    evidence_refs = set(traits["outcome_ack"]["evidence_ids"])
+    assert evidence_refs == {"sess-1:x1", "sess-2:x2", "sess-3:x3"}
+
+
+def test_reflection_repeated_sub_threshold_runs_do_not_inflate(tmp_path):
+    """Running reflection repeatedly with sub-threshold evidence must not
+    inflate evidence counts or confidence. Once the threshold is met, all
+    unique evidence must be represented exactly once."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    batch = [
+        _make_experience("outcome_ack", "alice", "sess-1", "x1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-2", "x2", offset=1),
+    ]
+    mgr.save(batch)
+
+    # Run reflection 3 times with no new evidence — no trait, no inflation
+    for _ in range(3):
+        n = asyncio.run(refl.reflect_on_experiences(
+            mgr, None, owner="alice", session_id="sess-1",
+        ))
+        assert n == 0
+
+    traits = [e for e in mgr.load(owner="alice") if e.get("category") == "trait"]
+    assert traits == [], "no trait should exist after repeated sub-threshold runs"
+
+    # Now add the 3rd experience — all three must be represented exactly once
+    batch2 = [
+        _make_experience("outcome_ack", "alice", "sess-3", "x3", offset=2),
+    ]
+    mgr.save(mgr.load_all() + batch2)
+
+    n = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-3",
+    ))
+    assert n >= 1
+
+    traits = {t["signal"]: t for t in mgr.load(owner="alice")
+              if t.get("category") == "trait"}
+    assert "outcome_ack" in traits
+    assert traits["outcome_ack"]["evidence_count"] == 3
+    assert len(traits["outcome_ack"]["evidence_ids"]) == 3
+
+
+def test_reflection_same_signal_owner_isolated(tmp_path):
+    """Two owners with the same signal must each get their own trait with
+    only their own evidence references. Cross-owner leakage must not occur."""
+    refl = _load_reflector()
+    mgr = MemoryManager(str(tmp_path))
+
+    # Alice's 3 outcome_ack experiences
+    alice_exps = [
+        _make_experience("outcome_ack", "alice", "sess-a1", "xa1", offset=0),
+        _make_experience("outcome_ack", "alice", "sess-a2", "xa2", offset=1),
+        _make_experience("outcome_ack", "alice", "sess-a3", "xa3", offset=2),
+    ]
+    # Bob's 3 outcome_ack experiences — same signal, different owner
+    bob_exps = [
+        _make_experience("outcome_ack", "bob", "sess-b1", "xb1", offset=3),
+        _make_experience("outcome_ack", "bob", "sess-b2", "xb2", offset=4),
+        _make_experience("outcome_ack", "bob", "sess-b3", "xb3", offset=5),
+    ]
+    mgr.save(alice_exps + bob_exps)
+
+    # Reflect for alice only
+    n_alice = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="alice", session_id="sess-a1",
+    ))
+    assert n_alice >= 1
+
+    # Reflect for bob only
+    n_bob = asyncio.run(refl.reflect_on_experiences(
+        mgr, None, owner="bob", session_id="sess-b1",
+    ))
+    assert n_bob >= 1
+
+    alice_traits = {t["signal"]: t for t in mgr.load(owner="alice")
+                    if t.get("category") == "trait"}
+    bob_traits = {t["signal"]: t for t in mgr.load(owner="bob")
+                  if t.get("category") == "trait"}
+
+    assert "outcome_ack" in alice_traits
+    assert "outcome_ack" in bob_traits
+
+    # Alice's trait must only reference alice's evidence
+    alice_evidence = set(alice_traits["outcome_ack"]["evidence_ids"])
+    assert alice_evidence == {"sess-a1:xa1", "sess-a2:xa2", "sess-a3:xa3"}
+    assert alice_traits["outcome_ack"]["owner"] == "alice"
+    assert alice_traits["outcome_ack"]["evidence_count"] == 3
+
+    # Bob's trait must only reference bob's evidence
+    bob_evidence = set(bob_traits["outcome_ack"]["evidence_ids"])
+    assert bob_evidence == {"sess-b1:xb1", "sess-b2:xb2", "sess-b3:xb3"}
+    assert bob_traits["outcome_ack"]["owner"] == "bob"
+    assert bob_traits["outcome_ack"]["evidence_count"] == 3
+
+    # Neither trait's evidence set must contain the other owner's references
+    assert not (alice_evidence & bob_evidence), (
+        f"evidence sets overlap: {alice_evidence} & {bob_evidence}"
+    )
 
 
 

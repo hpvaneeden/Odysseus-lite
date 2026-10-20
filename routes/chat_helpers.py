@@ -144,6 +144,7 @@ class ChatContext:
     was_compacted: bool
     user: Optional[str]
     uprefs: dict
+    no_memory: bool
     preset: PresetInfo
     preprocessed: PreprocessedMessage
     context_trimmed: bool = False
@@ -339,6 +340,7 @@ async def preprocess(
     chat_handler, message, att_ids, sess,
     auto_opened_docs: Optional[list] = None,
     allow_tool_preprocessing: bool = True,
+    allow_background_extraction: bool = True,
 ) -> PreprocessedMessage:
     """Run chat_handler.preprocess_message and wrap the result."""
     enhanced, user_content, text_ctx, yt_transcripts, att_meta = (
@@ -751,6 +753,27 @@ async def build_chat_context(
         _preface_kwargs["use_rag"] = use_rag_val
     preface, rag_sources, web_sources = chat_processor.build_context_preface(**_preface_kwargs)
 
+    # Slice 3: functional interaction adaptation. This reads only owner-scoped
+    # state, and shares the exact persistence/privacy gates used by memory.
+    if (
+        mem_enabled
+        and not compare_mode
+        and not str(getattr(sess, "name", "") or "").startswith("[CMP]")
+        and allow_background_extraction
+        and uprefs.get("auto_memory", True)
+        and uprefs.get("auto_experience", False)
+        and uprefs.get("emotional_state_enabled", False)
+    ):
+        try:
+            from services.memory.emotional_state import get_emotional_context
+            emotional_context = get_emotional_context(
+                chat_processor.memory_manager, owner=user,
+            )
+            if emotional_context:
+                preface.append(emotional_context)
+        except Exception:
+            logger.debug("Emotional adaptation context unavailable", exc_info=True)
+
     # Capture used memories immediately
     used_memories = getattr(chat_processor, '_last_used_memories', [])
 
@@ -828,6 +851,7 @@ async def build_chat_context(
         was_compacted=was_compacted,
         user=user,
         uprefs=uprefs,
+        no_memory=no_memory,
         preset=preset,
         preprocessed=preprocessed,
         context_trimmed=_context_trimmed,
@@ -1171,6 +1195,7 @@ def run_post_response_tasks(
     *,
     incognito: bool = False,
     compare_mode: bool = False,
+    no_memory: bool = False,
     character_name: str = None,
     agent_rounds: int = 0,
     agent_tool_calls: int = 0,
@@ -1194,6 +1219,9 @@ def run_post_response_tasks(
     turn's request too.
     """
     _extraction_jobs: list = []
+    # Compare pane sessions carry a server-checked [CMP] marker in addition to
+    # the request flag; treat either signal as a hard persistence exclusion.
+    compare_mode = compare_mode or str(getattr(sess, "name", "") or "").startswith("[CMP]")
 
     # Experience recording (evolving social behaviour, slice 1): a small,
     # deterministic, LLM-free capture of explicit feedback / corrections /
@@ -1207,6 +1235,7 @@ def run_post_response_tasks(
         allow_background_extraction
         and not incognito
         and not compare_mode
+        and not no_memory
         and uprefs.get("memory_enabled", True)
         and uprefs.get("auto_memory", True)
         and uprefs.get("auto_experience", False)
@@ -1215,6 +1244,24 @@ def run_post_response_tasks(
         _extraction_jobs.append(("experience", record_experiences(
             sess, memory_manager, memory_vector,
             owner=owner, session_id=session_id,
+        )))
+
+    # Functional emotional state is updated only from persisted, owner-scoped
+    # Slice 1 evidence, after the recorder has run. It is opt-in and never
+    # runs for private/compare/no-memory turns.
+    if (
+        allow_background_extraction
+        and not incognito
+        and not compare_mode
+        and not no_memory
+        and uprefs.get("memory_enabled", True)
+        and uprefs.get("auto_memory", True)
+        and uprefs.get("auto_experience", False)
+        and uprefs.get("emotional_state_enabled", False)
+    ):
+        from services.memory.emotional_state import update_emotional_state
+        _extraction_jobs.append(("emotional_state", update_emotional_state(
+            memory_manager, owner=owner, session_id=session_id,
         )))
 
     # Reflection on experiences (evolving social behaviour, slice 2): a
@@ -1228,6 +1275,7 @@ def run_post_response_tasks(
         allow_background_extraction
         and not incognito
         and not compare_mode
+        and not no_memory
         and uprefs.get("memory_enabled", True)
         and uprefs.get("auto_memory", True)
         and uprefs.get("auto_reflection", False)
@@ -1244,6 +1292,7 @@ def run_post_response_tasks(
         allow_background_extraction
         and not incognito
         and not compare_mode
+        and not no_memory
         and uprefs.get("memory_enabled", True)
         and uprefs.get("auto_memory", True)
     ):

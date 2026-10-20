@@ -318,7 +318,10 @@ class ChatProcessor:
             mem_entries = self.memory_manager.load(owner=owner)
 
             ordered_memories = sorted(
-                mem_entries,
+                [
+                    m for m in mem_entries
+                    if str(m.get("category") or "").lower() not in {"experience", "trait"}
+                ],
                 key=lambda m: int(m.get("timestamp") or 0),
                 reverse=True,
             )

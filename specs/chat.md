@@ -64,6 +64,8 @@ Fallback candidates receive route-neutral context shaping. Only compaction perfo
 
 `src.chat_processor.ChatProcessor.build_context_preface()` owns source preface construction. It can add memory, RAG, web search, URL page content, and skills index context before the model call.
 
+Slice 3 functional interaction adaptation is owned by `services/memory/emotional_state.py` and is wired through `routes/chat_helpers.py`. It uses only explicit, persisted experience signals to adjust response behavior; it makes no claim that the assistant or user has a particular subjective feeling. Its owner-scoped state decays over time and is gated by memory, experience, and per-user opt-in preferences. Incognito, compare, `no_memory`, and blocked background extraction suppress state reads or writes. The state is advisory context and cannot change safety policy or permissions.
+
 Chat preface enhances the model's context. It must not rewrite the user message or force literal-vs-fetch interpretation before the model sees the request. See [context-building.md](context-building.md).
 
 Chat-owned external context must enter the model through `untrusted_context_message()` unless a different treatment is explicitly documented. This includes memory, RAG, web search, URL fetches, prefetched search context, YouTube transcripts, research injection, and manual context injection.

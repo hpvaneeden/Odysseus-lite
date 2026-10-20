@@ -465,6 +465,21 @@
           </div>
           <div class="admin-card">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px">
+              <h2 style="margin:0;display:inline-flex;align-items:center;gap:6px">Record interaction feedback</h2>
+              <label class="admin-switch" style="flex-shrink:0"><input type="checkbox" id="auto-experience-toggle" /><span class="admin-slider"></span></label>
+            </div>
+            <span class="admin-toggle-sub" style="display:block;margin-top:6px">Save explicit corrections, boundaries, positive feedback, and confirmed outcomes as evidence for later adaptation.</span>
+          </div>
+          <div class="admin-card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px">
+              <h2 style="margin:0;display:inline-flex;align-items:center;gap:6px">Adapt responses to feedback</h2>
+              <label class="admin-switch" style="flex-shrink:0"><input type="checkbox" id="emotional-state-toggle" /><span class="admin-slider"></span></label>
+            </div>
+            <span class="admin-toggle-sub" style="display:block;margin-top:6px">Use decaying interaction signals to guide response style across chats. Requires interaction feedback recording and does not infer feelings.</span>
+            <button type="button" id="emotional-state-reset" class="memory-toolbar-btn danger" style="margin-top:10px">Reset interaction state</button>
+          </div>
+          <div class="admin-card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px">
               <h2 style="margin:0;display:inline-flex;align-items:center;gap:6px"><svg width="13" height="13" viewBox="0 0 24 24" fill="var(--accent, var(--red))" aria-hidden="true"><path d="M12 0L14.59 8.41L23 12L14.59 15.59L12 24L9.41 15.59L1 12L9.41 8.41Z"/></svg>Auto-extract skills</h2>
               <label class="admin-switch" style="flex-shrink:0"><input type="checkbox" id="auto-skills-toggle" /><span class="admin-slider"></span></label>
             </div>

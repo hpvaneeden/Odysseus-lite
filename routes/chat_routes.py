@@ -866,6 +866,7 @@ def setup_chat_routes(
             time_filter=time_filter,
             webhook_manager=webhook_manager,
             allow_tool_preprocessing=allow_tool_preprocessing,
+            allow_background_extraction=not tool_policy.block_all_tool_calls,
             defer_context_shaping=foreground_policy.enabled,
         )
 
@@ -974,6 +975,7 @@ def setup_chat_routes(
             ctx.uprefs, memory_manager, memory_vector, webhook_manager,
             character_name=ctx.preset.character_name,
             owner=ctx.user,
+            no_memory=ctx.no_memory,
             allow_background_extraction=not tool_policy.block_all_tool_calls,
         )
 
@@ -1456,6 +1458,10 @@ def setup_chat_routes(
             # index would be useless / unwanted noise.
             agent_mode=(chat_mode == "agent"),
             allow_tool_preprocessing=allow_tool_preprocessing,
+            allow_background_extraction=(
+                not pre_context_tool_policy.block_all_tool_calls
+                and not tool_approval_continuation
+            ),
             defer_context_shaping=foreground_policy.enabled,
             continuation_context_message=(
                 pending_tool_approval.continuation_query
@@ -2350,6 +2356,7 @@ def setup_chat_routes(
                                     sess, session_manager, session, message, full_response,
                                     _metrics_to_save, ctx.uprefs, memory_manager, memory_vector, webhook_manager,
                                     incognito=incognito, compare_mode=compare_mode,
+                                    no_memory=no_memory,
                                     character_name=ctx.preset.character_name,
                                     owner=_user,
                                     allow_background_extraction=(
@@ -2618,6 +2625,7 @@ def setup_chat_routes(
                                     sess, session_manager, session, message, _response_to_save,
                                     _metrics_to_save, ctx.uprefs, memory_manager, memory_vector, webhook_manager,
                                     incognito=incognito, compare_mode=compare_mode,
+                                    no_memory=no_memory,
                                     character_name=ctx.preset.character_name,
                                                             agent_rounds=_agent_rounds,
                                     agent_tool_calls=_agent_tool_calls,

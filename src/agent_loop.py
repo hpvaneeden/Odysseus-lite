@@ -39,7 +39,12 @@ from src.tool_security import (
     email_tool_policy_names,
     plan_mode_disabled_tools,
 )
-from src.tool_policy import GUIDE_ONLY_DIRECTIVE, WEB_TOOL_NAMES, ToolPolicy
+from src.tool_policy import (
+    CONVERSATION_ONLY_DIRECTIVE,
+    GUIDE_ONLY_DIRECTIVE,
+    WEB_TOOL_NAMES,
+    ToolPolicy,
+)
 from src.tool_capabilities import (
     ResultIntegrity,
     ToolRunSecurityContext,
@@ -4439,6 +4444,8 @@ async def stream_agent_loop(
             _prepend_agent_directive(route_messages, build_active_plan_note(approved_plan))
         if guide_only:
             _prepend_agent_directive(route_messages, GUIDE_ONLY_DIRECTIVE)
+        elif tool_policy and tool_policy.mode == "conversation_only":
+            _prepend_agent_directive(route_messages, CONVERSATION_ONLY_DIRECTIVE)
         return {
             "messages": route_messages,
             "mcp_schemas": route_mcp_schemas,

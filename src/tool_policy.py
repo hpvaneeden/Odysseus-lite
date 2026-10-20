@@ -16,6 +16,14 @@ GUIDE_ONLY_DIRECTIVE = (
     "output they will produce locally."
 )
 
+CONVERSATION_ONLY_DIRECTIVE = (
+    "## CASUAL CONVERSATION - TOOL POLICY\n"
+    "The latest user turn asks for casual conversation or a change of topic. "
+    "Respond naturally in text, follow the new topic, and do not repeat the "
+    "previous tool action. Do not call tools unless the user explicitly asks "
+    "for a specific tool-backed action in this turn."
+)
+
 WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
 
 
@@ -176,6 +184,16 @@ _GUIDE_ONLY_PATTERNS: Tuple[Tuple[re.Pattern[str], str], ...] = tuple(
     )
 )
 
+_CONVERSATION_ONLY_PATTERNS: Tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b(?:i\s+)?(?:just\s+)?(?:want|wanna|would\s+like)\s+to\s+chat\b",
+        r"\b(?:let'?s|can\s+we|could\s+we)\s+(?:just\s+)?chat\b",
+        r"\bget\s+my\s+mind\s+off\b",
+        r"\b(?:something|anything)\s+else\b.{0,100}\b(?:just\s+)?(?:chat|talk|relax|distract)\b",
+    )
+)
+
 
 @dataclass(frozen=True)
 class ToolPolicy:
@@ -201,6 +219,8 @@ class ToolPolicy:
             return self.reasons[tool_name]
         if self.block_all_tool_calls and self.mode == "guide_only":
             return "Tool use is disabled for this guide-only turn."
+        if self.block_all_tool_calls and self.mode == "conversation_only":
+            return "Tool use is disabled because the user asked for casual conversation."
         return "Tool use is disabled for this turn."
 
 
@@ -213,6 +233,17 @@ def detect_guide_only_turn(message: object) -> Optional[str]:
     for pattern, reason in _GUIDE_ONLY_PATTERNS:
         if pattern.search(text):
             return reason
+    return None
+
+
+def detect_conversation_only_turn(message: object) -> Optional[str]:
+    """Return a reason when the user clearly asks for casual conversation."""
+
+    if not isinstance(message, str) or not message.strip():
+        return None
+    text = re.sub(r"\s+", " ", message.strip())
+    if any(pattern.search(text) for pattern in _CONVERSATION_ONLY_PATTERNS):
+        return "casual conversation or topic change requested"
     return None
 
 
@@ -272,6 +303,21 @@ def build_effective_tool_policy(
             hidden_tools=frozenset(hidden),
             reasons=MappingProxyType(dict(reasons)),
             mode="guide_only",
+            block_all_tool_calls=True,
+            disable_mcp=True,
+        )
+
+    conversation_reason = detect_conversation_only_turn(last_user_message)
+    if conversation_reason:
+        all_tools = known_tool_names()
+        disabled.update(all_tools)
+        hidden.update(all_tools)
+        reasons.update({tool: f"{conversation_reason}." for tool in all_tools})
+        return ToolPolicy(
+            disabled_tools=frozenset(disabled),
+            hidden_tools=frozenset(hidden),
+            reasons=MappingProxyType(dict(reasons)),
+            mode="conversation_only",
             block_all_tool_calls=True,
             disable_mcp=True,
         )

@@ -1217,6 +1217,27 @@ def run_post_response_tasks(
             owner=owner, session_id=session_id,
         )))
 
+    # Reflection on experiences (evolving social behaviour, slice 2): a
+    # controlled, LLM-free scan of an owner's recorded experiences to detect
+    # recurring patterns and persist them as inspectable traits. Runs AFTER
+    # experience recording so newly written experiences are visible.
+    # Shares the same memory-privacy gates as experience recording plus the
+    # auto_reflection pref — default off while this layer is under development
+    # (opt in per user via PUT /api/prefs/auto_reflection with {"value": true}).
+    if (
+        allow_background_extraction
+        and not incognito
+        and not compare_mode
+        and uprefs.get("memory_enabled", True)
+        and uprefs.get("auto_memory", True)
+        and uprefs.get("auto_reflection", False)
+    ):
+        from services.memory.experience_reflection import reflect_on_experiences
+        _extraction_jobs.append(("reflection", reflect_on_experiences(
+            memory_manager, memory_vector,
+            owner=owner, session_id=session_id,
+        )))
+
     # Extract after each completed response. The extractor receives a bounded
     # recent transcript and deduplicates against this owner's saved memories.
     if (

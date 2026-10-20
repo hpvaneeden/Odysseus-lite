@@ -120,6 +120,12 @@ def test_personal_profile_questions_are_not_auto_web_lookups():
     assert is_factual_lookup_request("What is the history of blues?")
 
 
+def test_music_history_lookup_remains_tool_eligible():
+    message = "Yeah, let's look at the history of blues and rock."
+    assert detect_conversation_only_turn(message) is None
+    assert build_effective_tool_policy(last_user_message=message).mode == "normal"
+
+
 def test_normal_policy_preserves_existing_disabled_tools():
     policy = build_effective_tool_policy(
         disabled_tools={"web_search"},

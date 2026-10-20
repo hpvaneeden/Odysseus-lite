@@ -42,6 +42,7 @@ from src.tool_security import (
 from src.tool_policy import (
     CONVERSATION_ONLY_DIRECTIVE,
     GUIDE_ONLY_DIRECTIVE,
+    ODYSSEUS_DEFAULT_INTERACTION_RULES,
     WEB_TOOL_NAMES,
     ToolPolicy,
 )
@@ -880,6 +881,7 @@ def _assemble_prompt(tool_names: set, disabled_tools: set = None, compact: bool 
             _API_AGENT_RULES,
         ]
         parts.extend(_domain_rules_for_tools(included))
+        parts.append(ODYSSEUS_DEFAULT_INTERACTION_RULES)
         return "\n\n".join(parts)
 
     parts = [_AGENT_PREAMBLE, _TOOL_CALL_PROTOCOL]
@@ -907,6 +909,7 @@ def _assemble_prompt(tool_names: set, disabled_tools: set = None, compact: bool 
 
     parts.append(_AGENT_RULES)
     parts.extend(_domain_rules_for_tools(included))
+    parts.append(ODYSSEUS_DEFAULT_INTERACTION_RULES)
     return "\n\n".join(parts)
 
 

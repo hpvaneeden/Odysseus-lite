@@ -9,6 +9,7 @@ from src.chat_helpers import extract_urls
 from src.youtube_handler import is_youtube_url
 from src.search import comprehensive_web_search, fetch_webpage_content
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
+from src.tool_policy import ODYSSEUS_DEFAULT_INTERACTION_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +305,10 @@ class ChatProcessor:
                 "role": "system",
                 "content": preset_system_prompt
             })
+        preface.append({
+            "role": "system",
+            "content": ODYSSEUS_DEFAULT_INTERACTION_RULES,
+        })
         preface.append({
             "role": "system",
             "content": UNTRUSTED_CONTEXT_POLICY,

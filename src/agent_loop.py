@@ -3002,8 +3002,13 @@ def _resolve_tool_blocks(
             # against schemas offered in this round, so this cannot create a
             # route to an unavailable or disabled MCP tool.
             normalized_name = tc_name
-            if isinstance(tc_name, str) and ":" in tc_name:
-                server_label, tool_name = tc_name.split(":", 1)
+            if isinstance(tc_name, str) and not tc_name.startswith("mcp__"):
+                if ":" in tc_name:
+                    server_label, tool_name = tc_name.split(":", 1)
+                elif "__" in tc_name:
+                    server_label, tool_name = tc_name.split("__", 1)
+                else:
+                    server_label, tool_name = "", ""
                 for schema in advertised_tool_schemas or ():
                     fn = schema.get("function", {}) if isinstance(schema, dict) else {}
                     qualified = fn.get("name", "") if isinstance(fn, dict) else ""
@@ -3016,7 +3021,7 @@ def _resolve_tool_blocks(
                     label = ""
                     if isinstance(description, str) and description.startswith("[MCP:"):
                         label = description[5:].split("]", 1)[0].split(" (", 1)[0]
-                    if server_label.casefold() in {parts[1].casefold(), label.casefold()}:
+                    if server_label and server_label.casefold() in {parts[1].casefold(), label.casefold()}:
                         normalized_name = qualified
                         break
             block = function_call_to_tool_block(normalized_name, tc_args)

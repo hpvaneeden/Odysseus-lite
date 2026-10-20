@@ -23,6 +23,7 @@ assertions) end-to-end with a mocked LLM stream, and assert on whether
 """
 import asyncio
 import json
+import pytest
 
 import src.agent_loop as al
 
@@ -201,7 +202,8 @@ def test_resolve_tool_blocks_native_path_untouched_when_native_calls_present():
     assert blocks[0].tool_type == "bash"
 
 
-def test_resolve_tool_blocks_maps_advertised_mcp_display_name_alias():
+@pytest.mark.parametrize("alias", ["diffuser:generate_image", "diffuser__generate_image"])
+def test_resolve_tool_blocks_maps_advertised_mcp_display_name_alias(alias):
     schemas = [{
         "type": "function",
         "function": {
@@ -210,7 +212,7 @@ def test_resolve_tool_blocks_maps_advertised_mcp_display_name_alias():
         },
     }]
     native_calls = [{
-        "name": "diffuser:generate_image",
+        "name": alias,
         "arguments": json.dumps({"prompt": "golden fries"}),
     }]
 

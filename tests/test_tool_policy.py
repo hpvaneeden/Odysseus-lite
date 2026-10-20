@@ -9,6 +9,7 @@ from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
 from src.tool_policy import (
     WEB_TOOL_NAMES,
     build_effective_tool_policy,
+    detect_conversation_only_turn,
     detect_guide_only_turn,
     web_search_enabled_for_turn,
 )
@@ -69,6 +70,35 @@ def test_guide_only_policy_blocks_and_hides_tools():
         assert tool in policy.disabled_tools
         assert tool in policy.hidden_tools
         assert policy.blocks(tool)
+
+
+def test_personal_state_sharing_does_not_enable_tools():
+    policy = build_effective_tool_policy(
+        last_user_message="God I'm feeling a bit ill today."
+    )
+    assert policy.mode == "conversation_only"
+    assert policy.disable_mcp is True
+    assert policy.blocks("web_search")
+    assert policy.blocks("trigger_research")
+
+
+def test_explicit_tool_request_in_personal_update_is_preserved():
+    message = "I'm feeling ill today. Can you find a nearby pharmacy?"
+    assert detect_conversation_only_turn(message) is None
+    policy = build_effective_tool_policy(last_user_message=message)
+    assert policy.mode == "normal"
+    assert not policy.blocks("web_search")
+
+
+def test_casual_preference_and_joke_requests_enter_conversation_mode():
+    preference = (
+        "I don't need to be reminded of actual work when I chat or joke; "
+        "I need a distraction."
+    )
+    joke = "LOL, I just want to chat with you. Tell me a good joke."
+    assert detect_conversation_only_turn(preference)
+    assert detect_conversation_only_turn(joke)
+    assert build_effective_tool_policy(last_user_message=joke).blocks("web_search")
 
 
 def test_normal_policy_preserves_existing_disabled_tools():

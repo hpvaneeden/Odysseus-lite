@@ -19,9 +19,12 @@ GUIDE_ONLY_DIRECTIVE = (
 CONVERSATION_ONLY_DIRECTIVE = (
     "## CASUAL CONVERSATION - TOOL POLICY\n"
     "The latest user turn asks for casual conversation or a change of topic. "
-    "Respond naturally in text, follow the new topic, and do not repeat the "
-    "previous tool action. Do not call tools unless the user explicitly asks "
-    "for a specific tool-backed action in this turn."
+    "Acknowledge personal updates naturally and respond to the topic the user "
+    "actually raised. Do not infer a task from stored profile details, redirect "
+    "the conversation to work, or remind the user to return to work unless they "
+    "ask. Do not narrate tool availability or repeat a previous tool action. "
+    "Do not call tools unless the user explicitly asks for a specific "
+    "tool-backed action in this turn."
 )
 
 WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
@@ -191,7 +194,32 @@ _CONVERSATION_ONLY_PATTERNS: Tuple[re.Pattern[str], ...] = tuple(
         r"\b(?:let'?s|can\s+we|could\s+we)\s+(?:just\s+)?chat\b",
         r"\bget\s+my\s+mind\s+off\b",
         r"\b(?:something|anything)\s+else\b.{0,100}\b(?:just\s+)?(?:chat|talk|relax|distract)\b",
+        r"\b(?:shoot(?:ing)?\s+the\s+breeze|just\s+banter(?:ing)?|just\s+talk(?:ing)?)\b",
+        r"\b(?:tell|give)\s+me\s+(?:a|another|one)\s+(?:good\s+)?joke\b",
+        r"\b(?:don'?t|do\s+not)\s+(?:remind|steer|redirect)\s+me\s+(?:back\s+)?to\s+(?:actual\s+)?work\b",
+        r"\bwhen\s+i\s+(?:chat|joke|just\s+talk)\b.{0,160}\b(?:away\s+from\s+work|distraction|need\s+a\s+break)\b",
     )
+)
+
+_PERSONAL_STATE_ONLY_PATTERNS: Tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b(?:i'?m|i\s+am|i\s+feel|i'?ve\s+been\s+feeling)\s+(?:feeling\s+)?"
+        r"(?:a\s+bit\s+|a\s+little\s+|pretty\s+|really\s+|quite\s+|so\s+)?"
+        r"(?:ill|sick|unwell|tired|exhausted|stressed|overwhelmed|sad|down|"
+        r"depressed|anxious|worried|lonely|frustrated|happy|excited|rough)\b",
+        r"\b(?:today|tonight)\b.{0,40}\b(?:feel|feeling)\s+"
+        r"(?:ill|sick|unwell|tired|stressed|sad|down|anxious|rough)\b",
+    )
+)
+
+_EXPLICIT_ACTION_REQUEST_RE = re.compile(
+    r"\b(?:can|could|would|will)\s+you\s+(?:please\s+)?"
+    r"(?:search|look\s+up|find|book|send|create|open|run|execute|call|email|"
+    r"generate|edit|save|delete|update|compare|research|help\s+me\s+find)\b"
+    r"|\bplease\s+(?:search|look\s+up|find|book|send|create|open|run|execute|"
+    r"call|email|generate|edit|save|delete|update|compare|research)\b",
+    re.IGNORECASE,
 )
 
 
@@ -237,13 +265,17 @@ def detect_guide_only_turn(message: object) -> Optional[str]:
 
 
 def detect_conversation_only_turn(message: object) -> Optional[str]:
-    """Return a reason when the user clearly asks for casual conversation."""
+    """Return a reason when the user is chatting or sharing a personal update."""
 
     if not isinstance(message, str) or not message.strip():
         return None
     text = re.sub(r"\s+", " ", message.strip())
+    if _EXPLICIT_ACTION_REQUEST_RE.search(text):
+        return None
     if any(pattern.search(text) for pattern in _CONVERSATION_ONLY_PATTERNS):
         return "casual conversation or topic change requested"
+    if any(pattern.search(text) for pattern in _PERSONAL_STATE_ONLY_PATTERNS):
+        return "personal state shared without a request for action"
     return None
 
 

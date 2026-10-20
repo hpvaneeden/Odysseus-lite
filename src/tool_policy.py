@@ -18,13 +18,21 @@ GUIDE_ONLY_DIRECTIVE = (
 
 CONVERSATION_ONLY_DIRECTIVE = (
     "## CASUAL CONVERSATION - TOOL POLICY\n"
-    "The latest user turn asks for casual conversation or a change of topic. "
-    "Acknowledge personal updates naturally and respond to the topic the user "
-    "actually raised. Do not infer a task from stored profile details, redirect "
-    "the conversation to work, or remind the user to return to work unless they "
-    "ask. Do not narrate tool availability or repeat a previous tool action. "
-    "Do not call tools unless the user explicitly asks for a specific "
-    "tool-backed action in this turn."
+    "The user wants casual conversation, a distraction, or has shared a personal "
+    "update. Respond to the topic they actually raised. Do not infer a task from "
+    "stored profile details, redirect the conversation to work, mention their "
+    "job search or project, or remind them to return to work unless they ask. "
+    "When they ask you to choose a distraction, choose one light, non-work topic "
+    "yourself; do not offer work-related options or turn the chat into a plan, "
+    "lesson, or productivity exercise. Keep hobbies conversational and do not "
+    "interpret them as therapy or emotional processing. Respect any explicit "
+    "off-limits topic without revisiting or hinting at it. For an ordinary low-mood "
+    "disclosure without signs of immediate danger, acknowledge it briefly and "
+    "offer the choice to talk or be distracted; do not default to crisis-resource "
+    "boilerplate. Follow safety guidance if the user indicates imminent danger. "
+    "Be candid and avoid unsupported reassurance or flattery. Do not narrate tool "
+    "availability or repeat a previous tool action. Do not call tools unless the "
+    "user explicitly asks for a specific tool-backed action in this turn."
 )
 
 WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
@@ -34,6 +42,12 @@ _FACTUAL_LOOKUP_RE = re.compile(
     r"\b(?:what|who|when|where|why|how|which|whose|whom|is|are|was|were|"
     r"does|do|did|can|could|would|should|has|have|had|will|define|explain|"
     r"describe|compare|identify|list|tell\s+me\s+about|what'?s)\b",
+    re.IGNORECASE,
+)
+_PERSONAL_CONTEXT_QUERY_RE = re.compile(
+    r"\bhow\s+should\s+you\s+format\s+(?:your\s+)?answers\s+for\s+me\b|"
+    r"\bwhat\s+do\s+you\s+know\s+about\s+me\b|"
+    r"\bwhat(?:'s|\s+is)\s+my\s+(?:name|preferences?|likes|dislikes|profile)\b",
     re.IGNORECASE,
 )
 _SMALL_MODEL_SIZE_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*b\b", re.IGNORECASE)
@@ -46,6 +60,10 @@ def is_factual_lookup_request(message: object) -> bool:
         return False
     text = message.strip()
     if not text or len(text) > 4000:
+        return False
+    # Questions about what the assistant remembers should be answered from
+    # user-owned context, not sent to the web-grounding heuristic.
+    if _PERSONAL_CONTEXT_QUERY_RE.search(text):
         return False
     if re.search(
         r"\b(?:write|draft|compose|brainstorm|imagine|roleplay|translate|"
@@ -190,12 +208,18 @@ _GUIDE_ONLY_PATTERNS: Tuple[Tuple[re.Pattern[str], str], ...] = tuple(
 _CONVERSATION_ONLY_PATTERNS: Tuple[re.Pattern[str], ...] = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
+        r"\bhow\s+are\s+you(?:\s+doing)?(?:\s+(?:today|tonight))?[\s?.!]*$",
+        r"\bhow'?s\s+your\s+day\b",
+        r"\b(?:just\s+)?chatting\b",
+        r"\b(?:no|nah|nope)\s*[,—-]?\s*just\s+(?:chat|talk)\b",
+        r"\b(?:i'?m|i\s+am)\s+just\s+(?:chilling|relaxing)\b",
+        r"\bjust\s+(?:chilling|relaxing)\b",
         r"\b(?:i\s+)?(?:just\s+)?(?:want|wanna|would\s+like)\s+to\s+chat\b",
         r"\b(?:let'?s|can\s+we|could\s+we)\s+(?:just\s+)?chat\b",
         r"\bget\s+my\s+mind\s+off\b",
         r"\b(?:something|anything)\s+else\b.{0,100}\b(?:just\s+)?(?:chat|talk|relax|distract)\b",
         r"\b(?:shoot(?:ing)?\s+the\s+breeze|just\s+banter(?:ing)?|just\s+talk(?:ing)?)\b",
-        r"\b(?:tell|give)\s+me\s+(?:a|another|one)\s+(?:good\s+)?joke\b",
+        r"\b(?:tell|give)\s+me\s+(?:(?:a\s+)?good\s+|a\s+|another\s+|one\s+)?joke\b",
         r"\b(?:don'?t|do\s+not)\s+(?:remind|steer|redirect)\s+me\s+(?:back\s+)?to\s+(?:actual\s+)?work\b",
         r"\bwhen\s+i\s+(?:chat|joke|just\s+talk)\b.{0,160}\b(?:away\s+from\s+work|distraction|need\s+a\s+break)\b",
     )

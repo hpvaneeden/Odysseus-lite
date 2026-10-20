@@ -68,8 +68,10 @@ from routes.chat_helpers import (
 from src.action_intents import ToolIntent, classify_tool_intent as _classify_tool_intent
 from src.image_model_ids import looks_like_image_generation_model
 from src.tool_policy import (
+    CONVERSATION_ONLY_DIRECTIVE,
     WEB_TOOL_NAMES,
     build_effective_tool_policy,
+    detect_conversation_only_turn,
     is_factual_lookup_request,
     is_small_model_identifier,
     is_web_search_explicitly_denied,
@@ -824,6 +826,7 @@ def setup_chat_routes(
         if (
             not chat_request.use_web
             and "use_web" not in chat_request.model_fields_set
+            and detect_conversation_only_turn(message) is None
             and is_factual_lookup_request(message)
             and is_small_model_identifier(sess.model)
             and is_local_endpoint(sess.endpoint_url)
@@ -1335,6 +1338,7 @@ def setup_chat_routes(
                 _small_local_model = False
             if (
                 _small_local_model
+                and detect_conversation_only_turn(message) is None
                 and is_factual_lookup_request(message)
                 and not incognito
                 and not is_web_search_explicitly_denied(allow_web_search)
@@ -1888,6 +1892,16 @@ def setup_chat_routes(
                 if tool_approval_continuation
                 else _ensure_current_request_is_latest_user(context_source, message)
             )
+            if chat_mode == "chat" and tool_policy.mode == "conversation_only":
+                # Chat mode has no tool loop to inject the conversation policy,
+                # so place the same behavioral guidance immediately before the
+                # current user turn. This keeps personal/casual turns from being
+                # redirected by unrelated profile details.
+                insert_at = max(len(messages) - 1, 0)
+                messages.insert(
+                    insert_at,
+                    {"role": "system", "content": CONVERSATION_ONLY_DIRECTIVE},
+                )
 
             # Auto-compact notification
             if ctx.was_compacted:

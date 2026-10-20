@@ -18,7 +18,7 @@ import re
 import time
 from typing import Optional
 
-from src.memory import MemoryStoreUnreadable
+from src.memory import MemoryStoreUnreadable, memory_write_lock
 
 logger = logging.getLogger(__name__)
 
@@ -432,131 +432,147 @@ async def extract_and_store(
 
         # Strict load: this is a read-modify-write. Degrading to [] here would
         # save only the newly extracted facts and drop the entire store.
+        # The whole cycle runs under the process-wide write lock so a
+        # concurrent writer (experience recorder, audit, memory routes) cannot
+        # clobber these extracted facts.
         try:
-            existing = memory_manager.load_all_for_update()
+            with memory_write_lock():
+                existing = memory_manager.load_all_for_update()
+                added = 0
+                updated = 0
+
+                for fact in facts:
+                    if isinstance(fact, str):
+                        fact_text = fact
+                        category = "fact"
+                        action = "add"
+                        memory_id = None
+                    elif isinstance(fact, dict):
+                        fact_text = fact.get("text", "").strip()
+                        category = fact.get("category", "fact")
+                        action = fact.get("action", "add")
+                        memory_id = fact.get("memory_id")
+                    else:
+                        continue
+
+                    if not fact_text or len(fact_text) < 5:
+                        continue
+
+                    if action == "replace" and memory_id:
+                        target = next((
+                            entry for entry in existing
+                            if entry.get("id") == memory_id
+                            and (entry.get("owner") == _owner or entry.get("owner") is None)
+                        ), None)
+                        if target is None:
+                            logger.warning("Ignoring memory replacement for unavailable id %s", memory_id)
+                            continue
+                        target["text"] = fact_text
+                        target["category"] = category
+                        target["timestamp"] = int(time.time())
+                        target["source"] = "auto"
+                        if hasattr(session, "session_id"):
+                            target["session_id"] = session.session_id
+                        if memory_vector and memory_vector.healthy:
+                            try:
+                                memory_vector.remove(memory_id)
+                                memory_vector.add(memory_id, fact_text)
+                            except Exception as e:
+                                logger.warning("Memory vector replacement failed for %s: %s", memory_id, e)
+                        updated += 1
+                        continue
+
+                    # Dedup: check vector similarity first (fast), then exact text match.
+                    # A runtime embedding/ChromaDB failure (backend OOM, model evicted,
+                    # remote endpoint down) must not abort the whole batch — fall through
+                    # to the text/fuzzy dedup below instead of losing every validated
+                    # fact extracted this session. (`.healthy` is only set at init, so
+                    # it does not catch failures that develop later.)
+                    if memory_vector and memory_vector.healthy:
+                        try:
+                            existing_id = memory_vector.find_similar(fact_text, threshold=0.72)
+                        except Exception as e:
+                            logger.warning(f"Memory dedup (vector) unavailable, using text fallback: {e}")
+                            existing_id = None
+                        if existing_id:
+                            # The vector store is a single shared collection with no
+                            # owner metadata, so find_similar can return ANOTHER
+                            # tenant's memory. Only treat it as a duplicate when the
+                            # match is this user's own (or a legacy unowned) memory —
+                            # otherwise the user's freshly-extracted fact would be
+                            # silently dropped. Mirror the owner predicate used by the
+                            # text dedup below; cross-tenant/stale matches fall through.
+                            _match = next((e for e in existing if e.get("id") == existing_id), None)
+                            if _match is not None and (_match.get("owner") == _owner or _match.get("owner") is None):
+                                logger.debug(f"Memory dedup (vector): '{fact_text[:50]}' matches {existing_id}")
+                                continue
+
+                    # Text dedup fallback: exact match + fuzzy similarity
+                    user_existing = [e for e in existing if e.get("owner") == _owner or e.get("owner") is None] if _owner else existing
+                    if memory_manager.find_duplicates(fact_text, user_existing):
+                        continue
+                    # Fuzzy text similarity check (catches rephrased duplicates when vector index is unavailable)
+                    if _is_text_duplicate(fact_text, user_existing):
+                        logger.debug(f"Memory dedup (fuzzy): '{fact_text[:50]}' too similar to existing")
+                        continue
+
+                    entry = memory_manager.add_entry(fact_text, source="auto", category=category, owner=_owner)
+                    # Auto-pin identity facts (name, job, location) — core context
+                    if category == "identity":
+                        entry["pinned"] = True
+                    if hasattr(session, "session_id"):
+                        entry["session_id"] = session.session_id
+                    elif hasattr(session, "name"):
+                        entry["session_id"] = session.name
+
+                    existing.append(entry)
+
+                    # Add to vector index. The JSON store (saved below) is the source of
+                    # truth and the keyword path can still retrieve this entry, so a vector
+                    # write failure must not drop the fact or abort the remaining batch.
+                    if memory_vector and memory_vector.healthy:
+                        try:
+                            memory_vector.add(entry["id"], fact_text)
+                        except Exception as e:
+                            logger.warning(f"Memory vector add failed for {entry['id']}: {e}")
+
+                    added += 1
+
+                if added > 0 or updated > 0:
+                    memory_manager.save(existing)
+                    try:
+                        from src.event_bus import fire_event
+                        for _ in range(added + updated):
+                            fire_event("memory_added", _owner)
+                    except Exception:
+                        logger.debug("memory_added event dispatch failed", exc_info=True)
+                    logger.info("Auto memory extraction stored %d new and %d updated memories", added, updated)
+
+                    global _extractions_since_audit
+                    _extractions_since_audit += added
+                    should_audit = _extractions_since_audit >= AUDIT_INTERVAL
+                    if should_audit:
+                        _extractions_since_audit = 0
+                        logger.info("Audit threshold reached, running memory audit")
+                else:
+                    logger.info("Auto memory extraction ran: 0 added")
+                    should_audit = False
+
         except MemoryStoreUnreadable as e:
             logger.error("Skipping auto memory extraction, store unreadable: %s", e)
             return
-        added = 0
-        updated = 0
 
-        for fact in facts:
-            if isinstance(fact, str):
-                fact_text = fact
-                category = "fact"
-                action = "add"
-                memory_id = None
-            elif isinstance(fact, dict):
-                fact_text = fact.get("text", "").strip()
-                category = fact.get("category", "fact")
-                action = fact.get("action", "add")
-                memory_id = fact.get("memory_id")
-            else:
-                continue
+        except Exception as e:
+            logger.error(f"Memory extraction failed: {e}")
+            return
 
-            if not fact_text or len(fact_text) < 5:
-                continue
-
-            if action == "replace" and memory_id:
-                target = next((
-                    entry for entry in existing
-                    if entry.get("id") == memory_id
-                    and (entry.get("owner") == _owner or entry.get("owner") is None)
-                ), None)
-                if target is None:
-                    logger.warning("Ignoring memory replacement for unavailable id %s", memory_id)
-                    continue
-                target["text"] = fact_text
-                target["category"] = category
-                target["timestamp"] = int(time.time())
-                target["source"] = "auto"
-                if hasattr(session, "session_id"):
-                    target["session_id"] = session.session_id
-                if memory_vector and memory_vector.healthy:
-                    try:
-                        memory_vector.remove(memory_id)
-                        memory_vector.add(memory_id, fact_text)
-                    except Exception as e:
-                        logger.warning("Memory vector replacement failed for %s: %s", memory_id, e)
-                updated += 1
-                continue
-
-            # Dedup: check vector similarity first (fast), then exact text match.
-            # A runtime embedding/ChromaDB failure (backend OOM, model evicted,
-            # remote endpoint down) must not abort the whole batch — fall through
-            # to the text/fuzzy dedup below instead of losing every validated
-            # fact extracted this session. (`.healthy` is only set at init, so
-            # it does not catch failures that develop later.)
-            if memory_vector and memory_vector.healthy:
-                try:
-                    existing_id = memory_vector.find_similar(fact_text, threshold=0.72)
-                except Exception as e:
-                    logger.warning(f"Memory dedup (vector) unavailable, using text fallback: {e}")
-                    existing_id = None
-                if existing_id:
-                    # The vector store is a single shared collection with no
-                    # owner metadata, so find_similar can return ANOTHER
-                    # tenant's memory. Only treat it as a duplicate when the
-                    # match is this user's own (or a legacy unowned) memory —
-                    # otherwise the user's freshly-extracted fact would be
-                    # silently dropped. Mirror the owner predicate used by the
-                    # text dedup below; cross-tenant/stale matches fall through.
-                    _match = next((e for e in existing if e.get("id") == existing_id), None)
-                    if _match is not None and (_match.get("owner") == _owner or _match.get("owner") is None):
-                        logger.debug(f"Memory dedup (vector): '{fact_text[:50]}' matches {existing_id}")
-                        continue
-
-            # Text dedup fallback: exact match + fuzzy similarity
-            user_existing = [e for e in existing if e.get("owner") == _owner or e.get("owner") is None] if _owner else existing
-            if memory_manager.find_duplicates(fact_text, user_existing):
-                continue
-            # Fuzzy text similarity check (catches rephrased duplicates when vector index is unavailable)
-            if _is_text_duplicate(fact_text, user_existing):
-                logger.debug(f"Memory dedup (fuzzy): '{fact_text[:50]}' too similar to existing")
-                continue
-
-            entry = memory_manager.add_entry(fact_text, source="auto", category=category, owner=_owner)
-            # Auto-pin identity facts (name, job, location) — core context
-            if category == "identity":
-                entry["pinned"] = True
-            if hasattr(session, "session_id"):
-                entry["session_id"] = session.session_id
-            elif hasattr(session, "name"):
-                entry["session_id"] = session.name
-
-            existing.append(entry)
-
-            # Add to vector index. The JSON store (saved below) is the source of
-            # truth and the keyword path can still retrieve this entry, so a vector
-            # write failure must not drop the fact or abort the remaining batch.
-            if memory_vector and memory_vector.healthy:
-                try:
-                    memory_vector.add(entry["id"], fact_text)
-                except Exception as e:
-                    logger.warning(f"Memory vector add failed for {entry['id']}: {e}")
-
-            added += 1
-
-        if added > 0 or updated > 0:
-            memory_manager.save(existing)
-            try:
-                from src.event_bus import fire_event
-                for _ in range(added + updated):
-                    fire_event("memory_added", _owner)
-            except Exception:
-                logger.debug("memory_added event dispatch failed", exc_info=True)
-            logger.info("Auto memory extraction stored %d new and %d updated memories", added, updated)
-
-            global _extractions_since_audit
-            _extractions_since_audit += added
-            if _extractions_since_audit >= AUDIT_INTERVAL:
-                _extractions_since_audit = 0
-                logger.info("Audit threshold reached, running memory audit")
-                await audit_memories(
-                    memory_manager, memory_vector, endpoint_url, model, headers, owner=_owner
-                )
-        else:
-            logger.info("Auto memory extraction ran: 0 added")
+        # Lock released: run the LLM-bound audit after the inner try/except so
+        # we never hold the memory write lock across an await (which would
+        # deadlock with audit_memories' own lock acquisition).
+        if should_audit:
+            await audit_memories(
+                memory_manager, memory_vector, endpoint_url, model, headers, owner=_owner
+            )
 
     except Exception as e:
         logger.error(f"Memory extraction failed: {e}")
@@ -583,56 +599,67 @@ async def audit_memories(
     try:
         from src.llm_core import llm_call_async
 
-        existing = memory_manager.load(owner=owner)
-        if not existing:
-            logger.info("Memory audit: nothing to audit")
-            return {"before": 0, "after": 0}
+        # ── Phase 1: strict load + partition + skip-check (under write lock) ──
+        # The lock is released before the LLM await so concurrent writers are
+        # not blocked for the duration of the LLM call.
+        _audit_state = None
+        with memory_write_lock():
+            all_entries = memory_manager.load_all_for_update()
+            existing = (
+                [e for e in all_entries if e.get("owner") == owner]
+                if owner
+                else list(all_entries)
+            )
+            if not existing:
+                logger.info("Memory audit: nothing to audit")
+                return {"before": 0, "after": 0}
 
-        before_count = len(existing)
+            before_count = len(existing)
 
-        # Partition out PROTECTED_AUDIT_CATEGORIES (experience records): the
-        # facts-oriented tidy can neither see, merge, rewrite, nor drop them —
-        # they are re-attached verbatim below. Owner scoping is preserved: with
-        # an owner set, `existing` holds only that owner's rows, so other
-        # tenants' protected rows never enter this path at all.
-        protected_entries = [
-            m for m in existing
-            if str(m.get("category") or "").strip().lower() in PROTECTED_AUDIT_CATEGORIES
-        ]
-        protected_ids = {m["id"] for m in protected_entries}
-        auditable = [m for m in existing if m.get("id") not in protected_ids]
-        if not auditable:
-            logger.info("Memory audit: nothing auditable (protected categories only)")
-            return {"before": before_count, "after": before_count}
+            # Partition out PROTECTED_AUDIT_CATEGORIES (experience records).
+            protected_entries = [
+                m for m in existing
+                if str(m.get("category") or "").strip().lower() in PROTECTED_AUDIT_CATEGORIES
+            ]
+            protected_ids = {m["id"] for m in protected_entries}
+            auditable = [m for m in existing if m.get("id") not in protected_ids]
+            if not auditable:
+                logger.info("Memory audit: nothing auditable (protected categories only)")
+                return {"before": before_count, "after": before_count}
 
-        # Skip the LLM call entirely when this exact set of memories was
-        # already audited — the previous tidy left them in a clean state
-        # and nothing has changed since. Returns instantly so the UI shows
-        # "Already clean" without spending 30-120s on a wasted LLM round.
-        # The fingerprint covers id+text+category of the AUDITABLE slice only:
-        # any fact add/edit/delete invalidates it and the audit runs normally,
-        # while protected experience records neither invalidate the tidy state
-        # nor re-trigger a facts tidy.
-        current_fp = _fingerprint_entries(auditable)
-        last_state = _load_tidy_state(memory_manager).get(owner or "") or {}
-        if last_state.get("fingerprint") == current_fp:
-            logger.info("Memory audit: state unchanged since last tidy — skipping LLM")
-            return {
-                "before": before_count,
-                "after": before_count,
-                "already_tidy": True,
+            # Skip the LLM call entirely when this exact set of memories was
+            # already audited — the previous tidy left them in a clean state
+            # and nothing has changed since.
+            current_fp = _fingerprint_entries(auditable)
+            last_state = _load_tidy_state(memory_manager).get(owner or "") or {}
+            if last_state.get("fingerprint") == current_fp:
+                logger.info("Memory audit: state unchanged since last tidy — skipping LLM")
+                return {
+                    "before": before_count,
+                    "after": before_count,
+                    "already_tidy": True,
+                }
+
+            # Build payload: list of {id, text, category} for the LLM.
+            # Protected (experience) entries are deliberately absent.
+            memory_payload = [
+                {"id": m["id"], "text": m["text"], "category": m.get("category", "fact")}
+                for m in auditable
+            ]
+
+            _audit_state = {
+                "before_count": before_count,
+                "protected_entries": protected_entries,
+                "protected_ids": protected_ids,
+                "auditable": auditable,
+                "originals": {m["id"]: m for m in auditable},
+                "memory_payload": memory_payload,
             }
 
-        # Build payload: list of {id, text, category} for the LLM.
-        # Protected (experience) entries are deliberately absent.
-        memory_payload = [
-            {"id": m["id"], "text": m["text"], "category": m.get("category", "fact")}
-            for m in auditable
-        ]
-
+        # ── Phase 2: LLM call (no lock held — concurrent writers may proceed) ──
         audit_messages = [
             {"role": "system", "content": AUDIT_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(memory_payload, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(_audit_state["memory_payload"], ensure_ascii=False)},
         ]
 
         raw = await llm_call_async(
@@ -640,17 +667,12 @@ async def audit_memories(
             model,
             audit_messages,
             temperature=0.1,
-            # 16384 (was 2000): the deduped list of all memories can be large,
-            # and a reasoning model spends tokens thinking first — 2000 truncated
-            # the JSON so it never parsed ("bad_json").
             max_tokens=16384,
             headers=headers,
-            # Bound the call so the Tidy whirlpool can't spin indefinitely on a
-            # slow/large generation.
             timeout=120,
         )
 
-        # Parse the JSON list, tolerating reasoning-model noise: <think> blocks,
+        # Parse the JSON list, tolerating reasoning-model noise: </think> blocks,
         # markdown fences, leading prose, and trailing commas.
         import re as _re
         text = (raw or "").strip()
@@ -679,14 +701,16 @@ async def audit_memories(
                 cleaned = _loads_list(text[_a:_b + 1])
         if cleaned is None:
             logger.error(f"Memory audit returned non-JSON: {text[:300]}")
-            return {"before": before_count, "after": before_count, "error": "bad_json"}
+            return {"before": _audit_state["before_count"], "after": _audit_state["before_count"], "error": "bad_json"}
 
-        # Build lookup of original entries by ID so we can preserve metadata.
-        # Scoped to the auditable slice: a model-returned protected id can
-        # never match, so it is skipped as "unknown" instead of rewriting one.
-        originals = {m["id"]: m for m in auditable}
+        # Build rewritten auditable entries from the LLM response, matched by id
+        # against the phase-1 originals. Protected ids are unknown to this map
+        # and are skipped as "unknown id" — they are re-attached verbatim in
+        # phase 3 from the fresh reload, so they can never be rewritten.
+        before_count = _audit_state["before_count"]
+        originals = _audit_state["originals"]
 
-        final_entries = []
+        rewritten = []
         for item in cleaned:
             if not isinstance(item, dict):
                 continue
@@ -701,75 +725,102 @@ async def audit_memories(
                 entry["text"] = new_text
                 if item.get("category"):
                     entry["category"] = item["category"]
+                rewritten.append(entry)
             else:
                 # ID not found — skip to avoid inventing entries
                 logger.debug(f"Audit returned unknown id {mid}, skipping")
-                continue
 
-            final_entries.append(entry)
+        audited_ids = {e["id"] for e in rewritten}
+        after_count = len(rewritten) + len(_audit_state["protected_entries"])
 
-        # Re-attach protected entries verbatim — the tidy must never merge,
-        # rewrite, or drop linked experience evidence.
-        final_entries = final_entries + protected_entries
-        after_count = len(final_entries)
+        # ── Phase 3: fresh reload + merge + save (under write lock) ──
+        # Reloading under the lock captures any entries written by concurrent
+        # writers (e.g. experience records) during the LLM await. Those entries
+        # are preserved because they are not in `audited_ids`.
+        with memory_write_lock():
+            fresh_all = memory_manager.load_all_for_update()
 
-        # Safety net against catastrophic over-deletion. A conservative tidy
-        # should never wipe out half the store in one pass — if the model
-        # returned far fewer entries than it was given (over-consolidation, a
-        # dropped/truncated list, or it ignored ids), treat it as a misfire and
-        # DON'T save. Better to no-op than to silently lose memories.
-        if before_count >= 8 and after_count < before_count * 0.5:
-            logger.warning(
-                f"Memory audit would cut {before_count} -> {after_count} "
-                f"(>50% removed) — refusing as unsafe, keeping originals"
-            )
-            return {"before": before_count, "after": before_count, "error": "unsafe_removal"}
+            # Re-partition the fresh store: protected entries are preserved
+            # verbatim from the fresh snapshot (not from phase 1), so any
+            # experience recorded during the await survives.
+            fresh_protected = [
+                m for m in fresh_all
+                if str(m.get("category") or "").strip().lower() in PROTECTED_AUDIT_CATEGORIES
+            ]
+            fresh_protected_ids = {m["id"] for m in fresh_protected}
+            fresh_auditable = [m for m in fresh_all if m.get("id") not in fresh_protected_ids]
+            fresh_originals = {m["id"]: m for m in fresh_auditable}
 
-        # Merge audited entries back with other users' entries
-        if owner:
-            # Strict load: the merge below reconstructs the whole file. If this
-            # degraded to [] we would save only this owner's audited slice and
-            # destroy every other tenant's memories.
-            try:
-                all_entries = memory_manager.load_all_for_update()
-            except MemoryStoreUnreadable as e:
-                logger.error("Aborting memory audit save, store unreadable: %s", e)
-                return {
-                    "before": before_count,
-                    "after": before_count,
-                    "error": "store_unreadable",
-                }
-            audited_ids = {e["id"] for e in final_entries}
-            other_entries = [e for e in all_entries if e.get("owner") != owner and (e.get("owner") is not None)]
-            # Also keep legacy entries that weren't part of this audit
-            for e in all_entries:
-                if e.get("owner") is None and e["id"] not in audited_ids and e["id"] not in {o["id"] for o in other_entries}:
+            # Apply LLM rewrites to the FRESH auditable entries (matching by id).
+            # An entry modified concurrently after phase 1 is rewritten from its
+            # fresh version; an entry deleted concurrently is simply absent.
+            fresh_rewritten = []
+            for item in cleaned:
+                if not isinstance(item, dict):
+                    continue
+                mid = item.get("id", "")
+                new_text = item.get("text", "").strip()
+                if not new_text:
+                    continue
+                if mid in fresh_originals:
+                    entry = fresh_originals[mid].copy()
+                    entry["text"] = new_text
+                    if item.get("category"):
+                        entry["category"] = item["category"]
+                    fresh_rewritten.append(entry)
+                else:
+                    logger.debug(f"Audit returned unknown id {mid}, skipping")
+
+            fresh_audited_ids = {e["id"] for e in fresh_rewritten}
+
+            # Other tenants' entries (not this owner) are always preserved.
+            other_entries = [
+                e for e in fresh_all
+                if e.get("owner") != owner and (e.get("owner") is not None)
+            ]
+            # Also keep legacy ownerless entries that weren't part of this audit.
+            for e in fresh_all:
+                if (
+                    e.get("owner") is None
+                    and e["id"] not in fresh_audited_ids
+                    and e["id"] not in fresh_protected_ids
+                    and e["id"] not in {o["id"] for o in other_entries}
+                ):
                     other_entries.append(e)
-            saved_entries = final_entries + other_entries
-        else:
-            saved_entries = final_entries
-        memory_manager.save(saved_entries)
-        logger.info(
-            f"Memory audit complete: {before_count} -> {after_count} entries "
-            f"({before_count - after_count} removed/merged)"
-        )
 
-        # Rebuild vector index from the full saved set, not just this owner's
-        # slice — otherwise the shared collection is wiped of every other
-        # owner's entries until they happen to run their own audit.
-        if memory_vector and memory_vector.healthy:
-            memory_vector.rebuild(saved_entries)
+            saved_entries = fresh_rewritten + fresh_protected + other_entries
+            after_count = len(saved_entries)
 
-        # Persist the post-tidy fingerprint of the AUDITABLE slice so it
-        # compares against the auditable-only fingerprint computed on entry;
-        # protected records stay out of tidy-state bookkeeping entirely.
-        _save_tidy_state(
-            memory_manager,
-            owner,
-            _fingerprint_entries(
-                [e for e in final_entries if e.get("id") not in protected_ids]
-            ),
-        )
+            # Safety net against catastrophic over-deletion.
+            if before_count >= 8 and after_count < before_count * 0.5:
+                logger.warning(
+                    f"Memory audit would cut {before_count} -> {after_count} "
+                    f"(>50% removed) — refusing as unsafe, keeping originals"
+                )
+                return {"before": before_count, "after": before_count, "error": "unsafe_removal"}
+
+            memory_manager.save(saved_entries)
+            logger.info(
+                f"Memory audit complete: {before_count} -> {after_count} entries "
+                f"({before_count - after_count} removed/merged)"
+            )
+
+            # Rebuild vector index from the full saved set, not just this
+            # owner's slice — otherwise the shared collection is wiped of every
+            # other owner's entries until they happen to run their own audit.
+            if memory_vector and memory_vector.healthy:
+                memory_vector.rebuild(saved_entries)
+
+            # Persist the post-tidy fingerprint of the AUDITABLE slice so it
+            # compares against the auditable-only fingerprint computed on entry;
+            # protected records stay out of tidy-state bookkeeping entirely.
+            _save_tidy_state(
+                memory_manager,
+                owner,
+                _fingerprint_entries(
+                    [e for e in saved_entries if e.get("id") not in fresh_protected_ids]
+                ),
+            )
 
         return {"before": before_count, "after": after_count}
 

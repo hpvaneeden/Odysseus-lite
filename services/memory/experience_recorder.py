@@ -37,7 +37,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from src.memory import MemoryStoreUnreadable
+from src.memory import MemoryStoreUnreadable, memory_write_lock
 
 logger = logging.getLogger(__name__)
 
@@ -342,39 +342,46 @@ async def record_experiences(
             return 0
 
         try:
-            existing = memory_manager.load_all_for_update()
+            with memory_write_lock():
+                existing = memory_manager.load_all_for_update()
+
+                # Dedup against this owner's rows only. When owner is set,
+                # legacy ownerless rows are included (documented compatibility
+                # policy: pre-ownership records should not be re-recorded under
+                # an owner). When owner is None, only legacy ownerless rows are
+                # scanned — never another tenant's private records.
+                if owner:
+                    same_owner = [
+                        e for e in existing
+                        if isinstance(e, dict)
+                        and (e.get("owner") == owner or e.get("owner") is None)
+                    ]
+                else:
+                    same_owner = [
+                        e for e in existing
+                        if isinstance(e, dict) and e.get("owner") is None
+                    ]
+
+                if _is_duplicate(record, same_owner):
+                    logger.debug(
+                        "Experience already recorded for evidence %s", record["evidence"],
+                    )
+                    return 0
+
+                entry = memory_manager.add_entry(
+                    record["text"],
+                    source=EXPERIENCE_SOURCE,
+                    category=EXPERIENCE_CATEGORY,
+                    owner=owner,
+                )
+                for key in ("signal", "trigger", "evidence", "session_id"):
+                    if record.get(key) is not None:
+                        entry[key] = record[key]
+                existing.append(entry)
+                memory_manager.save(existing)
         except MemoryStoreUnreadable as e:
             logger.error("Skipping experience recording, store unreadable: %s", e)
             return 0
-
-        # Dedup against this owner's rows only — the same predicate the fact
-        # extractor uses: own rows plus legacy ownerless rows when owner set.
-        if owner:
-            same_owner = [
-                e for e in existing
-                if isinstance(e, dict)
-                and (e.get("owner") == owner or e.get("owner") is None)
-            ]
-        else:
-            same_owner = [e for e in existing if isinstance(e, dict)]
-
-        if _is_duplicate(record, same_owner):
-            logger.debug(
-                "Experience already recorded for evidence %s", record["evidence"],
-            )
-            return 0
-
-        entry = memory_manager.add_entry(
-            record["text"],
-            source=EXPERIENCE_SOURCE,
-            category=EXPERIENCE_CATEGORY,
-            owner=owner,
-        )
-        for key in ("signal", "trigger", "evidence", "session_id"):
-            if record.get(key) is not None:
-                entry[key] = record[key]
-        existing.append(entry)
-        memory_manager.save(existing)
 
         # Best-effort vector index. Never a gate (JSON is the source of
         # truth) and never consulted for dedup — see _is_duplicate.

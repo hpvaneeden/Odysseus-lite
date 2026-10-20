@@ -8,6 +8,7 @@ parallel implementation here risks silent drift between import paths.
 from src.memory import (
     MemoryManager,
     MemoryStoreUnreadable,
+    memory_write_lock,
     get_text_similarity,
     tokenize,
 )
@@ -15,6 +16,7 @@ from src.memory import (
 __all__ = [
     "MemoryManager",
     "MemoryStoreUnreadable",
+    "memory_write_lock",
     "get_text_similarity",
     "tokenize",
 ]

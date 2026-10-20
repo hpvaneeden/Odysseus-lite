@@ -22,7 +22,7 @@ import time
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from src.constants import GENERATED_IMAGES_DIR
-from src.memory import MemoryStoreUnreadable
+from src.memory import MemoryStoreUnreadable, memory_write_lock
 
 logger = logging.getLogger(__name__)
 
@@ -393,12 +393,13 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
         # save just this one entry over a store we only failed to read,
         # atomically destroying every memory in it (issue #5673).
         try:
-            memories = _memory_manager.load_all_for_update()
+            with memory_write_lock():
+                memories = _memory_manager.load_all_for_update()
+                memories.append(entry)
+                _memory_manager.save(memories)
         except MemoryStoreUnreadable as e:
             logger.error("Refusing to add memory, store unreadable: %s", e)
             return {"error": "Memory store is temporarily unreadable — nothing was saved."}
-        memories.append(entry)
-        _memory_manager.save(memories)
 
         # Update vector index if available
         if _memory_vector and hasattr(_memory_vector, 'healthy') and _memory_vector.healthy:

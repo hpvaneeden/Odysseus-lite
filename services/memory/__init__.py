@@ -2,7 +2,7 @@
 """Memory service — persistent memory storage and retrieval."""
 
 from .service import MemoryService, Memory, MemorySearchResult
-from .memory import MemoryManager, MemoryStoreUnreadable
+from .memory import MemoryManager, MemoryStoreUnreadable, memory_write_lock
 from .memory_vector import MemoryVectorStore
 
 __all__ = [
@@ -11,5 +11,6 @@ __all__ = [
     "MemorySearchResult",
     "MemoryManager",
     "MemoryStoreUnreadable",
+    "memory_write_lock",
     "MemoryVectorStore",
 ]

@@ -636,6 +636,7 @@ async def build_chat_context(
     use_enhanced_message: bool = False,
     agent_mode: bool = False,
     allow_tool_preprocessing: bool = True,
+    allow_background_extraction: bool = True,
     defer_context_shaping: bool = False,
     continuation_context_message: str | None = None,
     persist_user_message: bool = True,

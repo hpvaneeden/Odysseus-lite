@@ -57,6 +57,21 @@ def test_string_options_are_accepted():
     assert labels == ["Yes", "No"]
 
 
+def test_json_encoded_options_string_is_decoded():
+    options = [{"label": "Yes"}, {"label": "No"}]
+    content = json.dumps({"question": "Pick one", "options": json.dumps(options)})
+    _, result = _run(content)
+    labels = [o["label"] for o in result["ask_user"]["options"]]
+    assert labels == ["Yes", "No"]
+
+
+def test_invalid_options_string_is_rejected_instead_of_becoming_char_choices():
+    content = json.dumps({"question": "Pick one", "options": "not a choices array"})
+    _, result = _run(content)
+    assert "error" in result
+    assert result.get("exit_code") == 1
+
+
 def test_options_are_capped_at_six():
     content = json.dumps({
         "question": "Pick",

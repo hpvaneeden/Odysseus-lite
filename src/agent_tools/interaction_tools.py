@@ -22,7 +22,17 @@ class AskUserTool:
         if isinstance(parsed, dict):
             question = str(parsed.get("question", "")).strip()
             multi = bool(parsed.get("multi") or parsed.get("multiSelect"))
-            for opt in (parsed.get("options") or []):
+            raw_options = parsed.get("options")
+            # Small local models sometimes serialize the options array as a
+            # JSON string. Decode that shape explicitly; never iterate a
+            # scalar string character-by-character and turn punctuation into
+            # clickable choices.
+            if isinstance(raw_options, str):
+                try:
+                    raw_options = json.loads(raw_options)
+                except (ValueError, TypeError):
+                    raw_options = None
+            for opt in raw_options if isinstance(raw_options, list) else []:
                 if isinstance(opt, dict):
                     label = str(opt.get("label", "")).strip()
                     descr = str(opt.get("description", "")).strip()

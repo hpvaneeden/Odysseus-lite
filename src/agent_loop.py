@@ -2986,6 +2986,7 @@ def _resolve_tool_blocks(
     round_num: int,
     is_api_model: bool = False,
     allow_fenced_for_api: bool = False,
+    advertised_tool_schemas: Optional[list] = None,
 ):
     """Choose native function calls or fenced code block parsing. Returns (tool_blocks, used_native)."""
     used_native = False
@@ -2995,7 +2996,30 @@ def _resolve_tool_blocks(
         for tc in native_tool_calls:
             tc_name = tc.get("name", "")
             tc_args = tc.get("arguments", "{}")
-            block = function_call_to_tool_block(tc_name, tc_args)
+            # Some local OpenAI-compatible servers return MCP calls using the
+            # display spelling "server:tool" although we advertised the
+            # canonical mcp__<server_id>__<tool> function name. Resolve only
+            # against schemas offered in this round, so this cannot create a
+            # route to an unavailable or disabled MCP tool.
+            normalized_name = tc_name
+            if isinstance(tc_name, str) and ":" in tc_name:
+                server_label, tool_name = tc_name.split(":", 1)
+                for schema in advertised_tool_schemas or ():
+                    fn = schema.get("function", {}) if isinstance(schema, dict) else {}
+                    qualified = fn.get("name", "") if isinstance(fn, dict) else ""
+                    if not qualified.startswith("mcp__"):
+                        continue
+                    parts = qualified.split("__", 2)
+                    if len(parts) != 3 or parts[2] != tool_name:
+                        continue
+                    description = fn.get("description", "")
+                    label = ""
+                    if isinstance(description, str) and description.startswith("[MCP:"):
+                        label = description[5:].split("]", 1)[0].split(" (", 1)[0]
+                    if server_label.casefold() in {parts[1].casefold(), label.casefold()}:
+                        normalized_name = qualified
+                        break
+            block = function_call_to_tool_block(normalized_name, tc_args)
             if block:
                 tool_blocks.append(block)
                 converted_calls.append(tc)
@@ -5413,6 +5437,7 @@ async def stream_agent_loop(
             round_num,
             is_api_model=(_is_api_model and not guide_only),
             allow_fenced_for_api=_ody_doc_finetune_mode,
+            advertised_tool_schemas=all_tool_schemas,
         )
         if _ody_doc_stream_create_mode and tool_blocks:
             create_idx = next(

@@ -32,6 +32,7 @@ from core.database import (
     CalendarCal,
 )
 from src.constants import DATA_DIR, SKILLS_DIR, SKILLS_FILE, GALLERY_DIR, GALLERY_UPLOADS_DIR
+from src.memory import memory_write_lock
 
 logger = logging.getLogger(__name__)
 
@@ -39,18 +40,24 @@ logger = logging.getLogger(__name__)
 def _wipe_memory_files():
     """Blank memory.json + drop the per-owner tidy-state sidecar so the
     next audit doesn't try to diff against gone memories."""
-    for name in ("memory.json", "memory_tidy_state.json"):
-        p = os.path.join(DATA_DIR, name)
-        if not os.path.exists(p):
-            continue
-        try:
-            if name == "memory.json":
-                with open(p, "w", encoding="utf-8") as f:
-                    json.dump([], f)
-            else:
-                os.remove(p)
-        except OSError as e:
-            logger.warning(f"Could not reset {name}: {e}")
+    with memory_write_lock():
+        for name in (
+            "memory.json",
+            "memory_tidy_state.json",
+            "memory.json.reflection_state.json",
+            "memory.json.emotional_state.json",
+        ):
+            p = os.path.join(DATA_DIR, name)
+            if not os.path.exists(p):
+                continue
+            try:
+                if name == "memory.json":
+                    with open(p, "w", encoding="utf-8") as f:
+                        json.dump([], f)
+                else:
+                    os.remove(p)
+            except OSError as e:
+                logger.warning(f"Could not reset {name}: {e}")
 
 
 def _rmtree_quiet(path: str):

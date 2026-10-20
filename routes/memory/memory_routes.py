@@ -549,6 +549,17 @@ def setup_memory_routes(memory_manager: MemoryManager, session_manager: SessionM
 
         raise HTTPException(404, f"Memory item {memory_id} not found")
 
+    @router.delete("/emotional-state")
+    def clear_emotional_state(request: Request):
+        """Reset only the current owner's functional interaction state."""
+        from services.memory.emotional_state import reset_emotional_state
+        try:
+            cleared = reset_emotional_state(memory_manager, owner=_owner(request))
+        except Exception as e:
+            logger.error("Could not reset interaction state: %s", e)
+            raise HTTPException(503, "Interaction state is temporarily unavailable; no changes were made.")
+        return {"ok": True, "cleared": cleared}
+
     @router.delete("/{memory_id}")
     def delete_memory(request: Request, memory_id: str):
         """Delete a memory item by its ID."""

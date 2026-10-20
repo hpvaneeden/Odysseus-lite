@@ -191,10 +191,28 @@ async function syncToggles() {
   // injection (see chat_helpers.py: uprefs.skills_enabled).
   await syncPrefToggle('skills-enabled-header-toggle', 'skills_enabled', 'Skills enabled', 'Skills disabled', false);
   await syncPrefToggle('auto-memory-toggle', 'auto_memory', 'Auto-extract memories enabled', 'Auto-extract memories disabled', false);
+  await syncPrefToggle('auto-experience-toggle', 'auto_experience', 'Interaction feedback recording enabled', 'Interaction feedback recording disabled', false, false);
+  await syncPrefToggle('emotional-state-toggle', 'emotional_state_enabled', 'Response adaptation enabled', 'Response adaptation disabled', false, false);
   await syncPrefToggle('auto-skills-toggle', 'auto_skills', 'Auto-extract skills enabled', 'Auto-extract skills disabled', false);
   await syncPrefToggle('auto-approve-skills-toggle', 'auto_approve_skills', 'Auto-approve skills enabled', 'Auto-approve skills disabled', false);
   await syncPrefSlider('skill-confidence-slider', 'skill_min_confidence', 'skill-confidence-label', 0.85);
   await syncPrefNumber('skill-max-input', 'skill_max_injected', 3);
+
+  const resetEmotionalState = document.getElementById('emotional-state-reset');
+  if (resetEmotionalState && !resetEmotionalState.dataset.bound) {
+    resetEmotionalState.dataset.bound = '1';
+    resetEmotionalState.addEventListener('click', async () => {
+      if (!await uiModule.styledConfirm('Reset the saved interaction adaptation state for this account?', { confirmText: 'Reset', danger: true })) return;
+      try {
+        const res = await fetch(`${window.location.origin}/api/memory/emotional-state`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`Reset returned ${res.status}`);
+        showToast('Interaction state reset');
+      } catch (e) {
+        console.error('Failed to reset interaction state:', e);
+        showError('Failed to reset interaction state');
+      }
+    });
+  }
 
   // Reflect the header toggle into the sidebar dim + modal body opacity.
   const headerToggle = document.getElementById('memory-enabled-header-toggle');
@@ -328,14 +346,14 @@ async function syncPrefNumber(elementId, prefKey, defaultVal) {
   }
 }
 
-async function syncPrefToggle(elementId, prefKey, onMsg, offMsg, dimBelow = true) {
+async function syncPrefToggle(elementId, prefKey, onMsg, offMsg, dimBelow = true, defaultValue = true) {
   const toggle = document.getElementById(elementId);
   if (!toggle) return;
   try {
     const res = await fetch(`${window.location.origin}/api/prefs/${prefKey}`);
     if (res.ok) {
       const data = await res.json();
-      toggle.checked = data.value !== false;
+      toggle.checked = data.value == null ? defaultValue : data.value !== false;
     }
   } catch (e) {
     console.error(`Failed to load ${prefKey} pref:`, e);

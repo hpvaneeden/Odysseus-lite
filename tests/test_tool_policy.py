@@ -11,6 +11,7 @@ from src.tool_policy import (
     build_effective_tool_policy,
     detect_conversation_only_turn,
     detect_guide_only_turn,
+    is_factual_lookup_request,
     web_search_enabled_for_turn,
 )
 
@@ -99,6 +100,24 @@ def test_casual_preference_and_joke_requests_enter_conversation_mode():
     assert detect_conversation_only_turn(preference)
     assert detect_conversation_only_turn(joke)
     assert build_effective_tool_policy(last_user_message=joke).blocks("web_search")
+
+
+def test_short_chat_and_chilling_phrases_enter_conversation_mode():
+    for message in (
+        "Just chatting",
+        "I'm just chilling. Tell me good joke",
+        "No, just chat",
+        "How are you today?",
+    ):
+        policy = build_effective_tool_policy(last_user_message=message)
+        assert policy.mode == "conversation_only", message
+        assert policy.disable_mcp is True
+
+
+def test_personal_profile_questions_are_not_auto_web_lookups():
+    assert not is_factual_lookup_request("How should you format your answers for me?")
+    assert not is_factual_lookup_request("What do you know about me?")
+    assert is_factual_lookup_request("What is the history of blues?")
 
 
 def test_normal_policy_preserves_existing_disabled_tools():

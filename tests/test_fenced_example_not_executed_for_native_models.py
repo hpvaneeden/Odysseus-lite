@@ -201,6 +201,44 @@ def test_resolve_tool_blocks_native_path_untouched_when_native_calls_present():
     assert blocks[0].tool_type == "bash"
 
 
+def test_resolve_tool_blocks_maps_advertised_mcp_display_name_alias():
+    schemas = [{
+        "type": "function",
+        "function": {
+            "name": "mcp__image_gen__generate_image",
+            "description": "[MCP:diffuser] Generate an image",
+        },
+    }]
+    native_calls = [{
+        "name": "diffuser:generate_image",
+        "arguments": json.dumps({"prompt": "golden fries"}),
+    }]
+
+    blocks, used_native, _ = al._resolve_tool_blocks(
+        "", native_calls, round_num=1, is_api_model=True,
+        advertised_tool_schemas=schemas,
+    )
+
+    assert used_native is True
+    assert len(blocks) == 1
+    assert blocks[0].tool_type == "mcp__image_gen__generate_image"
+    assert json.loads(blocks[0].content) == {"prompt": "golden fries"}
+
+
+def test_resolve_tool_blocks_does_not_map_unadvertised_mcp_alias():
+    native_calls = [{
+        "name": "diffuser:generate_image",
+        "arguments": json.dumps({"prompt": "golden fries"}),
+    }]
+    blocks, used_native, _ = al._resolve_tool_blocks(
+        "", native_calls, round_num=1, is_api_model=True,
+        advertised_tool_schemas=[],
+    )
+
+    assert blocks == []
+    assert used_native is False
+
+
 # ---------------------------------------------------------------------------
 # Booyaka101's review on #3356: short-circuiting the *whole* parser for native
 # models (`tool_blocks = [] if is_api_model else parse_tool_blocks(...)`) also

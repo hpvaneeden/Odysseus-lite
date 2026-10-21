@@ -854,17 +854,49 @@ def _register_mcp_generated_image(
         if not match:
             return
         filename = match.group(1)
+        source_filename = filename
         image_dir = Path(GENERATED_IMAGES_DIR).resolve()
         image_path = (image_dir / filename).resolve()
         if image_path.parent != image_dir or not image_path.is_file():
             return
+        content = image_path.read_bytes()
+        from src.generated_images import GENERATED_IMAGE_RE
+        if not GENERATED_IMAGE_RE.fullmatch(filename):
+            # MCP servers may choose names such as img_123.png. Copy those
+            # outputs to Odysseus's canonical, route-safe filename format.
+            suffix = image_path.suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                return
+            from PIL import Image
+            from io import BytesIO
+            with Image.open(BytesIO(content)) as im:
+                im.verify()
+            filename = f"{uuid.uuid4().hex}{suffix}"
+            target = image_dir / filename
+            temp = image_dir / f".{filename}.tmp"
+            temp.write_bytes(content)
+            temp.replace(target)
+            image_path = target
+        digest = hashlib.sha256(content).hexdigest()
+        width = height = None
+        try:
+            from PIL import Image
+            with Image.open(image_path) as im:
+                width, height = im.size
+        except Exception:
+            pass
         db = SessionLocal()
         try:
-            existing = db.query(GalleryImage).filter(GalleryImage.filename == filename).first()
+            existing = db.query(GalleryImage).filter(GalleryImage.filename == source_filename).first()
             if existing:
                 # Never reassign an existing image across owners.
                 if existing.owner != owner:
                     return
+                existing.filename = filename
+                existing.file_hash = digest
+                existing.file_size = len(content)
+                existing.width = width
+                existing.height = height
                 if existing.session_id is None:
                     existing.session_id = session_id
                 db.commit()
@@ -875,17 +907,6 @@ def _register_mcp_generated_image(
                 result.setdefault("image_prompt", existing.prompt or prompt)
                 result.setdefault("image_model", existing.model or model)
                 return
-            content = image_path.read_bytes()
-            digest = hashlib.sha256(content).hexdigest()
-            width = height = None
-            try:
-                from PIL import Image
-                with Image.open(image_path) as im:
-                    im.verify()
-                with Image.open(image_path) as im:
-                    width, height = im.size
-            except Exception:
-                pass
             image_id = str(uuid.uuid4())
             db.add(GalleryImage(
                 id=image_id, filename=filename, prompt=prompt, model=model,

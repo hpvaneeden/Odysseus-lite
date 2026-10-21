@@ -775,6 +775,32 @@ async def build_chat_context(
         except Exception:
             logger.debug("Emotional adaptation context unavailable", exc_info=True)
 
+    # The newer affect layer is intentionally separate from the existing
+    # feedback-adaptation state: assistant affect comes from its own task
+    # outcomes, while user affect is included only when explicit capture is
+    # enabled. Neither source is allowed to overwrite the other.
+    if (
+        mem_enabled
+        and not compare_mode
+        and not str(getattr(sess, "name", "") or "").startswith("[CMP]")
+        and allow_background_extraction
+        and uprefs.get("auto_memory", True)
+        and (
+            uprefs.get("assistant_emotions_enabled", False)
+            or uprefs.get("user_emotion_recording_enabled", False)
+        )
+    ):
+        try:
+            from services.memory.affective_state import get_affective_context
+            preface.extend(get_affective_context(
+                chat_processor.memory_manager,
+                owner=user,
+                assistant_enabled=uprefs.get("assistant_emotions_enabled", False),
+                user_recording_enabled=uprefs.get("user_emotion_recording_enabled", False),
+            ))
+        except Exception:
+            logger.debug("Affective context unavailable", exc_info=True)
+
     # Capture used memories immediately
     used_memories = getattr(chat_processor, '_last_used_memories', [])
 
@@ -1204,6 +1230,7 @@ def run_post_response_tasks(
     owner: str = None,
     extract_skills: bool = True,
     allow_background_extraction: bool = True,
+    allow_affective_state_updates: bool = True,
 ):
     """Fire background tasks after a completed response: experience recording, memory extraction, webhooks, auto-name, skill extraction.
 
@@ -1223,6 +1250,34 @@ def run_post_response_tasks(
     # Compare pane sessions carry a server-checked [CMP] marker in addition to
     # the request flag; treat either signal as a hard persistence exclusion.
     compare_mode = compare_mode or str(getattr(sess, "name", "") or "").startswith("[CMP]")
+
+    # These two opt-in state updates do not call an LLM and store no transcript
+    # text. Keep them behind the same private-chat and memory-availability
+    # boundary, while allowing successful approval continuations to record the
+    # tool outcome even when heavier extraction jobs are suppressed.
+    affective_state_allowed = (
+        allow_affective_state_updates
+        and not incognito
+        and not compare_mode
+        and not no_memory
+        and uprefs.get("memory_enabled", True)
+        and uprefs.get("auto_memory", True)
+    )
+    if affective_state_allowed and uprefs.get("assistant_emotions_enabled", False):
+        from services.memory.affective_state import record_assistant_outcome
+        tool_events = last_metrics.get("tool_events", []) if isinstance(last_metrics, dict) else []
+        _extraction_jobs.append(("assistant_affect", record_assistant_outcome(
+            memory_manager,
+            owner=owner,
+            tool_events=tool_events,
+        )))
+    if affective_state_allowed and uprefs.get("user_emotion_recording_enabled", False):
+        from services.memory.affective_state import record_user_emotion
+        _extraction_jobs.append(("user_affect", record_user_emotion(
+            memory_manager,
+            owner=owner,
+            message=message,
+        )))
 
     # Experience recording (evolving social behaviour, slice 1): a small,
     # deterministic, LLM-free capture of explicit feedback / corrections /

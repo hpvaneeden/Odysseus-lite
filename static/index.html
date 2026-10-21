@@ -480,6 +480,21 @@
           </div>
           <div class="admin-card">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px">
+              <h2 style="margin:0;display:inline-flex;align-items:center;gap:6px">Odysseus task emotions</h2>
+              <label class="admin-switch" style="flex-shrink:0"><input type="checkbox" id="assistant-emotions-toggle" /><span class="admin-slider"></span></label>
+            </div>
+            <span class="admin-toggle-sub" style="display:block;margin-top:6px">Let Odysseus express brief satisfaction after a successful tool task or frustration about a real failure. Based on task outcomes, not your mood.</span>
+          </div>
+          <div class="admin-card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px">
+              <h2 style="margin:0;display:inline-flex;align-items:center;gap:6px">Remember explicitly shared emotions</h2>
+              <label class="admin-switch" style="flex-shrink:0"><input type="checkbox" id="user-emotion-recording-toggle" /><span class="admin-slider"></span></label>
+            </div>
+            <span class="admin-toggle-sub" style="display:block;margin-top:6px">Save a broad, temporary label only when you directly say how you feel. No mood inference and no transcript text is stored.</span>
+            <button type="button" id="affective-state-reset" class="memory-toolbar-btn danger" style="margin-top:10px">Reset both emotion states</button>
+          </div>
+          <div class="admin-card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px">
               <h2 style="margin:0;display:inline-flex;align-items:center;gap:6px"><svg width="13" height="13" viewBox="0 0 24 24" fill="var(--accent, var(--red))" aria-hidden="true"><path d="M12 0L14.59 8.41L23 12L14.59 15.59L12 24L9.41 15.59L1 12L9.41 8.41Z"/></svg>Auto-extract skills</h2>
               <label class="admin-switch" style="flex-shrink:0"><input type="checkbox" id="auto-skills-toggle" /><span class="admin-slider"></span></label>
             </div>

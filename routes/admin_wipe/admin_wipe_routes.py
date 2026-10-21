@@ -46,6 +46,7 @@ def _wipe_memory_files():
             "memory_tidy_state.json",
             "memory.json.reflection_state.json",
             "memory.json.emotional_state.json",
+            "memory.json.affective_state.json",
         ):
             p = os.path.join(DATA_DIR, name)
             if not os.path.exists(p):

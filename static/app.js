@@ -24,7 +24,7 @@ import {
 import markdownModule from './js/markdown.js';
 import chatRenderer from './js/chatRenderer.js?v=20260819approvalcontrol1';
 import sessionModule from './js/sessions.js';
-import memoryModule from './js/memory.js?v=20260722memoryloading1';
+import memoryModule from './js/memory.js?v=20261021interactioninsights1';
 import voiceRecorderModule from './js/voiceRecorder.js?v=20261021mobileaudio1';
 import voiceModeModule from './js/voiceMode.js?v=20261021voice2';
 import censorModule from './js/censor.js';

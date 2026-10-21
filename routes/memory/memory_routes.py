@@ -1,5 +1,5 @@
 # routes/memory_routes.py
-from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, File
 from typing import Dict, Any, Optional, List
 import json
 import os
@@ -31,6 +31,7 @@ from src.auth_helpers import get_current_user, require_user
 from src.endpoint_resolver import resolve_endpoint
 from src.task_endpoint import resolve_task_endpoint
 from src.upload_limits import read_upload_limited, MEMORY_IMPORT_MAX_BYTES
+from core.middleware import require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,84 @@ def setup_memory_routes(memory_manager: MemoryManager, session_manager: SessionM
 
     def _owner(request: Request) -> Optional[str]:
         return get_current_user(request)
+
+    @router.get("/interaction-insights")
+    def get_interaction_insights(request: Request, _admin: str = Depends(require_admin)):
+        """Admin-only, transcript-free snapshot for the Brain Insights panel.
+
+        This reports recorded interaction signals and decayed state only. It
+        intentionally omits trigger text, chat contents, and evidence IDs.
+        """
+        from services.memory.emotional_state import _read_state as read_interaction_state, _decay as decay_interaction
+        from services.memory.affective_state import (
+            _read_state as read_affective_state,
+            _decayed as decay_affect,
+            ASSISTANT_HALF_LIFE_SECONDS,
+            USER_HALF_LIFE_SECONDS,
+        )
+
+        owner = _owner(request)
+        owner_key = str(owner or "")
+        now = time.time()
+        try:
+            with memory_write_lock():
+                interaction_store = read_interaction_state(memory_manager)
+                affect_store = read_affective_state(memory_manager)
+                interaction = interaction_store.get("owners", {}).get(owner_key, {})
+                affect = affect_store.get("owners", {}).get(owner_key, {})
+
+                scores = decay_interaction(interaction, now) if isinstance(interaction, dict) else {
+                    "repair": 0.0, "rapport": 0.0, "success": 0.0,
+                }
+                assistant = affect.get("assistant", {}) if isinstance(affect, dict) else {}
+                user_affect = affect.get("user", {}) if isinstance(affect, dict) else {}
+                if not isinstance(assistant, dict):
+                    assistant = {}
+                if not isinstance(user_affect, dict):
+                    user_affect = {}
+                assistant_time = assistant.get("updated_at", now)
+                user_time = user_affect.get("updated_at", now)
+                affect_snapshot = {
+                    "assistant": {
+                        "satisfaction": decay_affect(assistant.get("satisfaction", 0), assistant_time, now, ASSISTANT_HALF_LIFE_SECONDS),
+                        "frustration": decay_affect(assistant.get("frustration", 0), assistant_time, now, ASSISTANT_HALF_LIFE_SECONDS),
+                        "last_outcome": assistant.get("last_outcome"),
+                        "updated_at": assistant_time,
+                    },
+                    "user": {
+                        "emotion": user_affect.get("emotion"),
+                        "strength": decay_affect(user_affect.get("strength", 0), user_time, now, USER_HALF_LIFE_SECONDS),
+                        "updated_at": user_time,
+                    },
+                }
+
+            cutoff = now - 30 * 24 * 60 * 60
+            events = []
+            for entry in memory_manager.load(owner=owner):
+                if not isinstance(entry, dict) or entry.get("category") != "experience" or entry.get("source") != "experience":
+                    continue
+                try:
+                    timestamp = int(entry.get("timestamp") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if timestamp < cutoff:
+                    continue
+                signal = entry.get("signal")
+                if signal not in {"correction", "negative_feedback", "positive_feedback", "social_signal", "outcome_ack"}:
+                    continue
+                events.append({"timestamp": timestamp, "signal": signal})
+            events.sort(key=lambda item: item["timestamp"])
+            return {
+                "generated_at": int(now),
+                "window_days": 30,
+                "interaction": scores,
+                "affect": affect_snapshot,
+                "event_count": len(events),
+                "events": events[-100:],
+            }
+        except Exception as exc:
+            logger.error("Could not read interaction insights: %s", exc, exc_info=True)
+            raise HTTPException(503, "Interaction insights are temporarily unavailable.")
 
     def _assert_session_owner(session_obj, user):
         """SECURITY: 404 if the caller does not own this session.

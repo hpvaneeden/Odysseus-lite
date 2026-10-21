@@ -457,6 +457,13 @@
         </div>
         <!-- ── Settings tab ── -->
         <div class="memory-tab-panel hidden" data-memory-panel="settings">
+          <div class="admin-card interaction-insights-card" id="interaction-insights-admin" hidden>
+            <div class="interaction-insights-heading">
+              <div><h2 style="margin:0">Interaction insights</h2><p class="memory-desc" style="margin:5px 0 0">A 30-day view of recorded feedback and the state that can shape replies.</p></div>
+              <button type="button" class="memory-toolbar-btn" id="interaction-insights-refresh">Refresh</button>
+            </div>
+            <div id="interaction-insights-content" aria-live="polite"><p class="memory-desc">Open to load the interaction data.</p></div>
+          </div>
           <div class="admin-card">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px">
               <h2 style="margin:0;display:inline-flex;align-items:center;gap:6px"><svg width="13" height="13" viewBox="0 0 24 24" fill="var(--accent, var(--red))" aria-hidden="true"><path d="M12 0L14.59 8.41L23 12L14.59 15.59L12 24L9.41 15.59L1 12L9.41 8.41Z"/></svg>Auto-extract memories</h2>
@@ -2657,7 +2664,7 @@
 <script type="module" src="/static/js/markdown.js"></script>
 <script type="module" src="/static/js/dragSort.js"></script>
 <script type="module" src="/static/js/sessions.js"></script>
-<script type="module" src="/static/js/memory.js?v=20260722memoryloading1"></script>
+<script type="module" src="/static/js/memory.js?v=20261021interactioninsights1"></script>
 <script type="module" src="/static/js/skills.js"></script>
 <script type="module" src="/static/js/tourHints.js"></script>
 <script type="module" src="/static/js/tourAutoplay.js"></script>

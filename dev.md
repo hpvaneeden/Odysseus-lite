@@ -1,4 +1,4 @@
-# Odysseus development notes
+# Odysseus Lite development notes
 
 Updated: 2026-10-21
 

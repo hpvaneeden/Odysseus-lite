@@ -7,7 +7,12 @@ prose for that round, which is the only path that produced such a turn.
 """
 
 import src.llm_core as llm_core
-from src.agent_loop import _append_tool_results
+from src.agent_loop import (
+    _append_tool_results,
+    _filter_approved_tool_replays,
+    _tool_call_signature,
+)
+from src.agent_tools import ToolBlock
 
 _RESULT = "bash: ok\nhello"
 _RECORD = {
@@ -98,3 +103,29 @@ def test_reasoning_only_round_keeps_its_carrier_and_its_known_empty_content():
     assert len(assistants) == 1
     assert assistants[0].get("reasoning_content") == "thinking about it"
     assert assistants[0]["content"] == ""
+
+
+def test_approved_replay_drops_only_identical_tool_call_and_keeps_native_alignment():
+    approved = ToolBlock(
+        "mcp__ce530683__generate_image",
+        '{"prompt": "a barbarian swinging an axe in battle"}',
+    )
+    duplicate = ToolBlock(
+        "mcp__ce530683__generate_image",
+        '{ "prompt" : "a barbarian swinging an axe in battle" }',
+    )
+    distinct = ToolBlock("web_search", '{"query": "history of the battle"}')
+    native_calls = [
+        {"id": "duplicate-call"},
+        {"id": "distinct-call"},
+    ]
+
+    blocks, calls, replayed = _filter_approved_tool_replays(
+        [duplicate, distinct],
+        native_calls,
+        _tool_call_signature(approved.tool_type, approved.content),
+    )
+
+    assert replayed == 1
+    assert blocks == [distinct]
+    assert calls == [{"id": "distinct-call"}]

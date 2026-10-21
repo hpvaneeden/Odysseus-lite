@@ -177,11 +177,32 @@ class FastEmbedClient:
                             shutil.rmtree(_root, ignore_errors=True)
             except Exception as _e:
                 logger.debug("embedding cache symlink-heal skipped: %s", _e)
-        kwargs = {"model_name": self.model, "cache_dir": cache_dir}
-        self._embedding = TextEmbedding(**kwargs)
+        # Keep FastEmbed's normal device selection so supported GPUs can help.
+        # If GPU session setup fails, retry explicitly with ONNX CPU execution.
+        self._text_embedding_cls = TextEmbedding
+        self._embedding_kwargs = {"model_name": self.model, "cache_dir": cache_dir}
+        self._cpu_fallback_active = False
+        try:
+            self._embedding = TextEmbedding(**self._embedding_kwargs)
+        except Exception as exc:
+            self._activate_cpu_fallback(exc)
         self._dim: Optional[int] = None
         self.url = "local://fastembed"
         logger.info(f"FastEmbed loaded model={self.model}")
+
+    def _activate_cpu_fallback(self, reason: Exception) -> None:
+        """Recreate the FastEmbed model with CPU after automatic/GPU setup fails."""
+        if self._cpu_fallback_active:
+            raise reason
+        logger.warning(
+            "FastEmbed automatic/GPU execution failed (%s); retrying with CPU",
+            reason,
+        )
+        self._embedding = self._text_embedding_cls(
+            **self._embedding_kwargs,
+            providers=["CPUExecutionProvider"],
+        )
+        self._cpu_fallback_active = True
 
     def get_sentence_embedding_dimension(self) -> int:
         if self._dim is not None:
@@ -198,7 +219,13 @@ class FastEmbedClient:
         if not texts:
             return np.array([], dtype="float32")
 
-        vecs = np.array(list(self._embedding.embed(texts)), dtype="float32")
+        try:
+            vecs = np.array(list(self._embedding.embed(texts)), dtype="float32")
+        except Exception as exc:
+            if self._cpu_fallback_active:
+                raise
+            self._activate_cpu_fallback(exc)
+            vecs = np.array(list(self._embedding.embed(texts)), dtype="float32")
 
         if normalize_embeddings and vecs.size > 0:
             norms = np.linalg.norm(vecs, axis=1, keepdims=True)

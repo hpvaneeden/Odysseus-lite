@@ -29,10 +29,18 @@ class VoiceMode {
     this.settings = settings;
     this.overlay = document.getElementById('voice-mode-overlay');
     this.canvas = document.getElementById('voice-mode-visual');
+    this.optionsPanel = document.getElementById('voice-options-panel');
+    this.optionsToggle = document.getElementById('voice-options-toggle');
     if (!this.overlay || !this.canvas) return;
     this.ctx = this.canvas.getContext('2d');
     document.getElementById('voice-mode-open')?.addEventListener('click', () => this.open());
     document.getElementById('voice-mode-close')?.addEventListener('click', () => this.close());
+    this.optionsToggle?.addEventListener('click', () => this.toggleOptions());
+    this.overlay.addEventListener('click', ev => {
+      if (!this.optionsPanel?.classList.contains('hidden')
+        && !this.optionsPanel.contains(ev.target)
+        && !this.optionsToggle?.contains(ev.target)) this.toggleOptions(false);
+    });
     document.getElementById('voice-mode-mic')?.addEventListener('click', () => this.toggleRecording());
     document.getElementById('voice-mode-stop-audio')?.addEventListener('click', () => window.aiTTSManager?.stop());
     document.getElementById('voice-theme-select')?.addEventListener('change', ev => this.selectTheme(ev.target.value));
@@ -45,7 +53,10 @@ class VoiceMode {
     window.addEventListener('odysseus-chat-response-done', () => this.onResponseDone());
     window.addEventListener('odysseus-stt-state', ev => this.onSTTState(ev.detail?.state));
     window.addEventListener('keydown', ev => {
-      if (ev.key === 'Escape' && this.active) this.close();
+      if (ev.key === 'Escape' && this.active) {
+        if (!this.optionsPanel?.classList.contains('hidden')) this.toggleOptions(false);
+        else this.close();
+      }
     });
     this.loadThemes();
   }
@@ -128,8 +139,18 @@ class VoiceMode {
   showThemeForm(show) {
     const form = document.getElementById('voice-theme-form');
     if (!form) return;
+    if (show) this.toggleOptions(true);
     form.classList.toggle('hidden', !show);
     if (show) document.getElementById('voice-theme-name')?.focus();
+  }
+
+  toggleOptions(force) {
+    if (!this.optionsPanel || !this.optionsToggle) return;
+    const show = typeof force === 'boolean' ? force : this.optionsPanel.classList.contains('hidden');
+    this.optionsPanel.classList.toggle('hidden', !show);
+    this.optionsToggle.setAttribute('aria-expanded', String(show));
+    if (!show) this.showThemeForm(false);
+    else document.getElementById('voice-theme-select')?.focus();
   }
 
   async createTheme(event) {
@@ -185,6 +206,7 @@ class VoiceMode {
     if (!this.active) return;
     this.active = false;
     clearTimeout(this.pendingRearm);
+    this.toggleOptions(false);
     if (this.recorder?.getIsRecording()) this.recorder.stopRecording();
     window.aiTTSManager?.stop();
     if (window.aiTTSManager) window.aiTTSManager.autoPlay = this.ttsWasAutoPlay;

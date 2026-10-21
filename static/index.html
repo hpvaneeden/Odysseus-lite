@@ -1249,33 +1249,40 @@
       <header class="voice-mode-header">
         <div><h2 id="voice-mode-title">Voice with Odysseus</h2><p>Talk naturally. Your transcript stays visible here while you speak.</p></div>
         <div class="voice-mode-head-actions">
-          <label class="voice-theme-picker-label" for="voice-theme-select">Theme</label>
-          <select id="voice-theme-select" aria-label="Voice visual theme"></select>
-          <button type="button" id="voice-theme-add" class="voice-quiet-button">Create theme</button>
-          <button type="button" id="voice-theme-delete" class="voice-quiet-button" hidden>Delete theme</button>
+          <button type="button" id="voice-options-toggle" class="voice-quiet-button" aria-expanded="false" aria-controls="voice-options-panel">Options</button>
           <button type="button" id="voice-mode-close" class="voice-close-button" aria-label="Close voice mode" title="Close voice mode">×</button>
         </div>
       </header>
+      <div id="voice-options-panel" class="voice-options-panel hidden" aria-label="Voice mode options">
+        <div class="voice-options-row">
+          <label class="voice-theme-picker-label" for="voice-theme-select">Visual theme</label>
+          <select id="voice-theme-select" aria-label="Voice visual theme"></select>
+          <button type="button" id="voice-theme-add" class="voice-quiet-button">Create</button>
+          <button type="button" id="voice-theme-delete" class="voice-quiet-button" hidden aria-label="Delete selected theme">×</button>
+        </div>
+        <label class="voice-handsfree"><input id="voice-handsfree-toggle" type="checkbox"><span>Hands-free</span><small>Listen again after Odysseus replies</small></label>
+        <form id="voice-theme-form" class="voice-theme-form hidden" autocomplete="off">
+          <label>Theme name<input id="voice-theme-name" maxlength="32" required placeholder="e.g. Deep sea"></label>
+          <label>Visual<select id="voice-theme-base"><option value="signal">Abstract signal</option><option value="matrix">Dot matrix</option></select></label>
+          <label>Accent<input id="voice-theme-color" type="color" value="#9cdef2"></label>
+          <div class="voice-theme-form-actions">
+            <button type="submit" class="voice-quiet-button">Save</button>
+            <button type="button" id="voice-theme-cancel" class="voice-quiet-button">Cancel</button>
+          </div>
+        </form>
+      </div>
       <div class="voice-mode-main">
         <canvas id="voice-mode-visual" class="voice-mode-visual" aria-hidden="true"></canvas>
         <div class="voice-mode-status" id="voice-mode-status" aria-live="polite">Ready when you are</div>
         <div class="voice-mode-caption" id="voice-mode-caption" aria-live="polite">Tap the microphone and say something.</div>
       </div>
       <div class="voice-mode-controls">
-        <label class="voice-handsfree"><input id="voice-handsfree-toggle" type="checkbox"><span>Hands-free</span><small>Listen again after Odysseus replies</small></label>
         <button type="button" id="voice-mode-mic" class="voice-mic-button" aria-label="Start listening">
           <svg class="voice-mic-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4"/><path d="M8 22h8"/></svg>
           <svg class="voice-stop-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="3"/></svg>
         </button>
         <button type="button" id="voice-mode-stop-audio" class="voice-quiet-button" disabled>Stop speaking</button>
       </div>
-      <form id="voice-theme-form" class="voice-theme-form hidden" autocomplete="off">
-        <label>Theme name<input id="voice-theme-name" maxlength="32" required placeholder="e.g. Deep sea"></label>
-        <label>Visual<select id="voice-theme-base"><option value="signal">Abstract signal</option><option value="matrix">Dot matrix</option></select></label>
-        <label>Accent<input id="voice-theme-color" type="color" value="#9cdef2"></label>
-        <button type="submit" class="voice-quiet-button">Save theme</button>
-        <button type="button" id="voice-theme-cancel" class="voice-quiet-button">Cancel</button>
-      </form>
     </section>
 
     <!-- Character (custom preset) modal -->

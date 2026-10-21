@@ -5,6 +5,7 @@
 export const KEYS = {
   THEME: 'odysseus-theme',
   TOGGLES: 'odysseus-toggles',
+  MOBILE_AGENT_DEFAULT_V1: 'odysseus-mobile-agent-default-v1',
   SIDEBAR_COLLAPSED: 'sidebar-collapsed',
   SIDEBAR_WIDTH: 'sidebar-width',
   SIDEBAR_SIDE: 'sidebar-side',

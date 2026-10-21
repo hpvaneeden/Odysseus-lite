@@ -205,7 +205,7 @@ class VoiceMode {
     this.setState('listening', 'Listening — tap again when you are done');
     this.recorder.startRecording(
       () => {
-        this.setState('idle', 'I couldn’t transcribe that. Check speech input settings.');
+        this.setState('idle', 'I didn’t get a transcript. Try again or check your microphone permission.');
       },
       message => this.ui?.showToast?.(message),
       message => {

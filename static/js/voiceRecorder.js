@@ -19,6 +19,8 @@ let recordingInterval = null;
 // Browser STT state
 let _recognition = null;
 let _browserTranscript = '';
+let _recognitionEndPromise = null;
+let _resolveRecognitionEnd = null;
 
 // Cached STT provider — refreshed on settings change
 let _sttProvider = 'disabled';
@@ -85,6 +87,7 @@ function startBrowserSTT() {
   _recognition.continuous = true;
   _recognition.interimResults = false;
   _recognition.lang = '';
+  _recognitionEndPromise = new Promise(resolve => { _resolveRecognitionEnd = resolve; });
 
   _recognition.onresult = (event) => {
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -98,14 +101,31 @@ function startBrowserSTT() {
     console.warn('Browser STT error:', e.error);
   };
 
+  _recognition.onend = () => {
+    if (_resolveRecognitionEnd) _resolveRecognitionEnd();
+    _resolveRecognitionEnd = null;
+  };
+
   _recognition.start();
 }
 
-function stopBrowserSTT() {
-  if (_recognition) {
-    try { _recognition.stop(); } catch (e) { /* ignore */ }
-    _recognition = null;
+async function stopBrowserSTT() {
+  const recognition = _recognition;
+  if (!recognition) return _browserTranscript.trim();
+
+  // stop() can still produce a final result asynchronously. Wait for `end`
+  // before reading the transcript, with a timeout for browser implementations
+  // that fail to send the lifecycle event.
+  try { recognition.stop(); } catch (e) { /* already stopped */ }
+  if (_recognitionEndPromise) {
+    await Promise.race([
+      _recognitionEndPromise,
+      new Promise(resolve => setTimeout(resolve, 1800)),
+    ]);
   }
+  if (_recognition === recognition) _recognition = null;
+  _recognitionEndPromise = null;
+  _resolveRecognitionEnd = null;
   return _browserTranscript.trim();
 }
 
@@ -181,14 +201,17 @@ export function startRecording(onFileCreated, showToast, showError, onTranscript
       };
 
       mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach(track => track.stop());
         _dispatchSTTState('processing');
 
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
         const provider = _sttProvider;
+        // Let browser recognition flush its final result before closing the
+        // microphone stream. Some browsers deliver that result after stop().
+        const browserTranscript = provider === 'browser' ? await stopBrowserSTT() : '';
+        stream.getTracks().forEach(track => track.stop());
 
         if (provider === 'browser') {
-          const transcript = stopBrowserSTT();
+          const transcript = browserTranscript;
           if (transcript) {
             insertTranscription(transcript, showToast);
             if (onTranscription) onTranscription(transcript);

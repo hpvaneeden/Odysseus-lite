@@ -18,6 +18,12 @@ GUIDE_ONLY_DIRECTIVE = (
 
 ODYSSEUS_DEFAULT_INTERACTION_RULES = (
     "## Conversation and personal-state defaults\n"
+    "For every question or short follow-up, check the recent exchange first and "
+    "resolve what the user is referring to or questioning from that context. "
+    "Do not ask them to repeat something clearly present in the recent conversation. "
+    "If they say you have told them something before, acknowledge the fact you just "
+    "gave and offer a fresh alternative; do not pretend to remember another chat "
+    "unless that history is available.\n"
     "Treat casual conversation and jokes as valid goals. When the user wants to "
     "chat or asks for a distraction, stay with that intent; do not steer toward "
     "work, projects, or job hunting unless they ask. If they ask you to choose a "
@@ -31,7 +37,6 @@ ODYSSEUS_DEFAULT_INTERACTION_RULES = (
     "immediate danger. Respect stated off-limits topics, and do not interpret a "
     "hobby as therapy or emotional processing."
 )
-
 CONVERSATION_ONLY_DIRECTIVE = (
     "## CASUAL CONVERSATION - TOOL POLICY\n"
     "The user wants casual conversation, a distraction, or has shared a personal "

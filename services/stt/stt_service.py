@@ -78,10 +78,45 @@ class STTService:
                     use_cuda = torch.cuda.is_available()
                 except Exception:
                     use_cuda = False
-                device = "cuda" if use_cuda else "cpu"
-                compute_type = "float16" if device == "cuda" else "int8"
-                self._whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
-                logger.info(f"faster-whisper model '{model_size}' loaded on {device}")
+                if use_cuda:
+                    # CUDA availability does not guarantee that this GPU and
+                    # CTranslate2 backend support efficient FP16. Try the
+                    # common GPU modes in order, then fall back to CPU so an
+                    # older card (or a mismatched CUDA runtime) can still use
+                    # Local Whisper.
+                    for compute_type in ("float16", "int8_float16", "int8_float32"):
+                        try:
+                            self._whisper_model = WhisperModel(
+                                model_size, device="cuda", compute_type=compute_type
+                            )
+                            logger.info(
+                                "faster-whisper model '%s' loaded on cuda (%s)",
+                                model_size, compute_type,
+                            )
+                            break
+                        except Exception as e:
+                            logger.warning(
+                                "Could not load faster-whisper on cuda (%s): %s",
+                                compute_type, e,
+                            )
+
+                if self._whisper_model is None:
+                    # CPU int8 is broadly supported and is the compatibility
+                    # path when CUDA is unavailable or unsupported.
+                    try:
+                        self._whisper_model = WhisperModel(
+                            model_size, device="cpu", compute_type="int8"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Could not load faster-whisper on cpu (int8): %s", e
+                        )
+                        # Some builds/models do not support CPU int8; try the
+                        # more widely supported float32 mode as a last resort.
+                        self._whisper_model = WhisperModel(
+                            model_size, device="cpu", compute_type="float32"
+                        )
+                    logger.info("faster-whisper model '%s' loaded on cpu", model_size)
             except Exception as e:
                 logger.error(f"Failed to load whisper model: {e}")
                 return None

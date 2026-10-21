@@ -246,9 +246,9 @@
   <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/FiraCode-Regular.woff2">
   <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/FiraCode-SemiBold.woff2">
   <link rel="stylesheet" href="/static/style.css?v=20260808startupshell1">
-  <link rel="stylesheet" href="/static/voice-mode.css?v=20261021voice1">
+  <link rel="stylesheet" href="/static/voice-mode.css?v=20261021voice2">
   <link rel="modulepreload" href="/static/app.js?v=20261021voice1">
-  <link rel="modulepreload" href="/static/js/chat.js?v=20261021voice1">
+  <link rel="modulepreload" href="/static/js/chat.js?v=20261021voice2">
   <link rel="modulepreload" href="/static/js/ui.js">
   <link rel="modulepreload" href="/static/js/sessions.js">
   <link rel="modulepreload" href="/static/js/markdown.js">
@@ -1275,6 +1275,7 @@
         <canvas id="voice-mode-visual" class="voice-mode-visual" aria-hidden="true"></canvas>
         <div class="voice-mode-status" id="voice-mode-status" aria-live="polite">Ready when you are</div>
         <div class="voice-mode-caption" id="voice-mode-caption" aria-live="polite">Tap the microphone and say something.</div>
+        <div id="voice-mode-prompt" class="voice-mode-prompt" aria-live="polite"></div>
       </div>
       <div class="voice-mode-controls">
         <button type="button" id="voice-mode-mic" class="voice-mic-button" aria-label="Start listening">
@@ -2673,7 +2674,7 @@
 <script type="module" src="/static/js/chatRenderer.js?v=20260819approvalcontrol1"></script>
 <script type="module" src="/static/js/codeRunner.js"></script>
 <script type="module" src="/static/js/chatStream.js?v=20260819approvalcontrol1"></script>
-  <script type="module" src="/static/js/chat.js?v=20261021voice1"></script>
+  <script type="module" src="/static/js/chat.js?v=20261021voice2"></script>
 <script type="module" src="/static/js/cookbook.js"></script>
 <script src="/static/js/cookbookSchedule.js"></script>
 <script type="module" src="/static/js/search-chat.js"></script>

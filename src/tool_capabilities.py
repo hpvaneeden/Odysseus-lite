@@ -582,6 +582,17 @@ _EXTERNAL_MESSAGE_SOURCES = frozenset(
 )
 _EXTERNAL_MESSAGE_SOURCE_PREFIXES = ("web page:",)
 
+# Image generation is a user-visible, non-destructive action that is commonly
+# part of an ongoing conversation after web context has been introduced. Keep
+# it available without lifting the external-context gate for arbitrary MCP
+# tools, network calls, private reads, or other writes.
+_EXTERNAL_CONTEXT_ALLOWED_TOOLS = frozenset(
+    {
+        "generate_image",
+        "mcp__image_gen__generate_image",
+    }
+)
+
 
 def messages_contain_external_untrusted_context(messages: Iterable[dict]) -> bool:
     """Detect explicitly labelled external context already present in a run."""
@@ -666,6 +677,8 @@ class ToolRunSecurityContext:
         if self.approval_gate_bypassed:
             return ToolGateDecision(True)
         if not self.external_untrusted_context_seen:
+            return ToolGateDecision(True)
+        if tool_name in _EXTERNAL_CONTEXT_ALLOWED_TOOLS:
             return ToolGateDecision(True)
         capabilities = capabilities_for_action(tool_name, content)
         blocked_effects = capabilities.effects & POST_EXTERNAL_BLOCKED_EFFECTS

@@ -1815,7 +1815,19 @@ function initializeEventListeners() {
     const chatBtn = el('mode-chat-btn');
     if (!agentBtn || !chatBtn) return;
     const state = loadToggleState();
-    let currentMode = state.mode || 'chat';
+    // Older builds wrote Chat into local storage as the implicit default.
+    // On a phone, migrate that old implicit state once so MCP/tools work on
+    // first use; after the migration, an explicit Chat choice remains saved.
+    const isMobileViewport = !!window.matchMedia?.('(max-width: 768px)').matches;
+    const mobileDefaultKey = Storage.KEYS.MOBILE_AGENT_DEFAULT_V1;
+    if (isMobileViewport && !Storage.get(mobileDefaultKey)) {
+      state.mode = 'agent';
+      saveToggleState(state);
+      Storage.set(mobileDefaultKey, '1');
+    }
+    // Agent mode is the useful default on both desktop and mobile; Chat stays
+    // available as an explicit opt-in and the saved selection still wins.
+    let currentMode = state.mode || 'agent';
 
     // Immediately hide bash button in chat mode on page load
     if (currentMode === 'chat') {

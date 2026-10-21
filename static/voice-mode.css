@@ -20,7 +20,7 @@ body.voice-mode-open #voice-mode-open { display: none; }
 .voice-quiet-button:hover:not(:disabled),.voice-close-button:hover { border-color:var(--voice-accent,#9cdef2); }
 .voice-close-button { width:36px; height:36px; padding:0; font-size:24px; line-height:1; }
 .voice-mode-main { flex:1; min-height:220px; width:min(900px,100%); margin:0 auto; display:flex; flex-direction:column; justify-content:center; align-items:center; }
-.voice-mode-visual { width:min(54vh,430px,80vw); height:min(54vh,430px,80vw); max-height:55%; filter:drop-shadow(0 18px 50px color-mix(in srgb,var(--voice-accent,#9cdef2) 9%,transparent)); }
+.voice-mode-visual { width:min(88vw,900px); height:min(52vh,430px); max-height:55%; filter:drop-shadow(0 18px 50px color-mix(in srgb,var(--voice-accent,#9cdef2) 9%,transparent)); }
 .voice-mode-status { min-height:24px; margin-top:12px; color:var(--voice-accent,#9cdef2); font-size:13px; text-align:center; }
 .voice-mode-caption { max-width:min(700px,92vw); max-height:16vh; overflow:auto; margin-top:12px; text-align:center; line-height:1.55; font-size:15px; white-space:pre-wrap; }
 .voice-mode-caption strong { color:var(--voice-accent,#9cdef2); }

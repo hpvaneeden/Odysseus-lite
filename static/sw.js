@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'odysseus-v384-voice-mic-icon';
+const CACHE_NAME = 'odysseus-v385-mcp-image-render';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -69,7 +69,7 @@ const PRECACHE = [
   '/static/js/codeRunner.js',
   '/static/js/chatStream.js',
   '/static/js/chat.js',
-  '/static/js/chat.js?v=20261021voice2',
+  '/static/js/chat.js?v=20261021imagefix1',
   '/static/js/cookbook.js',
   '/static/js/search-chat.js',
   '/static/js/compare/index.js',

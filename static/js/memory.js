@@ -1499,6 +1499,86 @@ async function handleImportFile(file) {
 var showToast = uiModule.showToast;
 var showError = uiModule.showError;
 
+function _insightPercent(value) {
+  const n = Number(value);
+  return Math.round(Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0)) * 100);
+}
+
+function _renderInteractionInsights(data) {
+  const host = document.getElementById('interaction-insights-content');
+  if (!host) return;
+  const interaction = data.interaction || {};
+  const affect = data.affect || {};
+  const axes = [
+    ['repair', 'Careful repair'],
+    ['rapport', 'Natural rapport'],
+    ['success', 'Task continuity'],
+  ];
+  const bars = axes.map(([key, label]) => {
+    const value = _insightPercent(interaction[key]);
+    return `<div class="interaction-insight-meter"><div><span>${label}</span><strong>${value}%</strong></div><div class="interaction-insight-track"><span style="width:${value}%"></span></div></div>`;
+  }).join('');
+
+  const events = Array.isArray(data.events) ? data.events : [];
+  const buckets = Array(6).fill(0);
+  const now = Number(data.generated_at || Date.now() / 1000);
+  events.forEach(event => {
+    const ageDays = Math.max(0, (now - Number(event.timestamp || now)) / 86400);
+    const index = Math.min(5, Math.floor((30 - Math.min(29.999, ageDays)) / 5));
+    buckets[index] += 1;
+  });
+  const peak = Math.max(1, ...buckets);
+  const chart = buckets.map((count, i) => {
+    const height = Math.max(count ? 8 : 2, Math.round(count / peak * 100));
+    return `<div class="interaction-insight-column"><span class="interaction-insight-bar" style="height:${height}%" title="${count} recorded signal${count === 1 ? '' : 's'}"></span><small>${25 - i * 5}d</small></div>`;
+  }).join('');
+
+  const labels = {
+    correction: 'Correction', negative_feedback: 'Boundary or negative feedback',
+    positive_feedback: 'Positive feedback', social_signal: 'Humour or warmth', outcome_ack: 'Confirmed outcome',
+  };
+  const recent = events.slice(-12).reverse();
+  const eventRows = recent.length
+    ? recent.map(event => `<li><span>${labels[event.signal] || 'Feedback signal'}</span><time>${new Date(Number(event.timestamp) * 1000).toLocaleString()}</time></li>`).join('')
+    : '<li class="interaction-insight-empty">No interaction feedback recorded in the last 30 days.</li>';
+
+  const user = affect.user || {};
+  const assistant = affect.assistant || {};
+  const emotion = user.emotion ? `${escapeHtml(user.emotion)} · ${_insightPercent(user.strength)}%` : 'No active explicit self-report';
+  const stateCards = `
+    <div class="interaction-insight-state"><span>User self-report</span><strong>${emotion}</strong></div>
+    <div class="interaction-insight-state"><span>Odysseus task outcome state</span><strong>Satisfaction ${_insightPercent(assistant.satisfaction)}% · Frustration ${_insightPercent(assistant.frustration)}%</strong><small>Last outcome: ${escapeHtml(assistant.last_outcome || 'none recorded')}</small></div>`;
+
+  host.innerHTML = `
+    <div class="interaction-insight-summary"><strong>${Number(data.event_count || 0)}</strong><span>feedback signals recorded in the last 30 days</span></div>
+    <div class="interaction-insight-grid">
+      <section class="interaction-insight-section"><h3>Current decayed response guidance</h3>${bars}</section>
+      <section class="interaction-insight-section"><h3>Recent explicit states</h3><div class="interaction-insight-states">${stateCards}</div></section>
+      <section class="interaction-insight-section"><h3>Recorded feedback over time</h3><div class="interaction-insight-chart" role="img" aria-label="Recorded feedback signals by five-day period">${chart}</div></section>
+      <section class="interaction-insight-section"><h3>Recent signals</h3><ul class="interaction-insight-events">${eventRows}</ul></section>
+    </div>
+    <p class="interaction-insight-note">This shows saved signals and decayed state, not a score for empathy or response quality. Review chat transcripts to judge how replies handled the moment. Conversation text and trigger phrases are not displayed here.</p>`;
+}
+
+async function _loadInteractionInsights() {
+  const card = document.getElementById('interaction-insights-admin');
+  const host = document.getElementById('interaction-insights-content');
+  if (!card || !host) return;
+  host.innerHTML = '<p class="memory-desc">Loading interaction data…</p>';
+  try {
+    const res = await fetch('/api/memory/interaction-insights', { credentials: 'same-origin' });
+    if (res.status === 403) { card.hidden = true; return; }
+    if (!res.ok) throw new Error(`Insights returned ${res.status}`);
+    const data = await res.json();
+    card.hidden = false;
+    _renderInteractionInsights(data);
+  } catch (error) {
+    console.warn('Could not load interaction insights:', error);
+    card.hidden = false;
+    host.innerHTML = '<p class="memory-desc">Interaction insights are temporarily unavailable. Try Refresh in a moment.</p>';
+  }
+}
+
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
   _wireMemoryDrag();
@@ -1515,8 +1595,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (target === 'skills') {
         import('./skills.js').then(m => { if (m.loadSkills) m.loadSkills(true); else if (m.default?.loadSkills) m.default.loadSkills(true); });
       }
+      if (target === 'settings') _loadInteractionInsights();
     });
   });
+
+  document.getElementById('interaction-insights-refresh')?.addEventListener('click', _loadInteractionInsights);
 
   const sortSelect = document.getElementById('memory-sort');
   if (sortSelect) {

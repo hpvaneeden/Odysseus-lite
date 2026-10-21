@@ -11031,6 +11031,33 @@ details a:hover {
   min-height: 0;
 }
 .memory-tab-panel.hidden { display: none; }
+.interaction-insights-card[hidden] { display: none !important; }
+.interaction-insights-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.interaction-insights-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.interaction-insight-section { min-width:0; padding:12px; border:1px solid var(--border); border-radius:10px; background:color-mix(in srgb,var(--fg) 2%,transparent); }
+.interaction-insight-section h3 { margin:0 0 12px; font-size:13px; font-weight:600; }
+.interaction-insight-meter { margin:10px 0; }
+.interaction-insight-meter > div:first-child { display:flex; justify-content:space-between; gap:8px; font-size:12px; }
+.interaction-insight-meter strong { font-variant-numeric:tabular-nums; }
+.interaction-insight-track { height:7px; margin-top:5px; overflow:hidden; border-radius:99px; background:color-mix(in srgb,var(--fg) 12%,transparent); }
+.interaction-insight-track > span { display:block; height:100%; border-radius:inherit; background:var(--accent,var(--red)); }
+.interaction-insight-summary { display:flex; align-items:baseline; gap:9px; margin:2px 0 12px; }
+.interaction-insight-summary strong { font-size:24px; color:var(--accent,var(--red)); font-variant-numeric:tabular-nums; }
+.interaction-insight-summary span,.interaction-insight-note,.interaction-insight-state small { font-size:11px; opacity:.68; }
+.interaction-insight-states { display:grid; gap:8px; }
+.interaction-insight-state { display:grid; gap:4px; font-size:12px; }
+.interaction-insight-state > span { opacity:.65; }
+.interaction-insight-state strong { font-weight:600; }
+.interaction-insight-chart { height:110px; display:flex; align-items:stretch; gap:8px; padding:10px 4px 0; border-bottom:1px solid var(--border); }
+.interaction-insight-column { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:5px; min-width:0; }
+.interaction-insight-bar { display:block; width:min(26px,70%); min-height:2px; border-radius:5px 5px 0 0; background:var(--accent,var(--red)); opacity:.82; }
+.interaction-insight-column small { font-size:9px; opacity:.55; }
+.interaction-insight-events { list-style:none; display:grid; gap:7px; max-height:150px; overflow:auto; padding:0; margin:0; }
+.interaction-insight-events li { display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-size:11px; }
+.interaction-insight-events time { flex-shrink:0; opacity:.58; font-size:10px; }
+.interaction-insight-empty { opacity:.6; }
+.interaction-insight-note { margin:12px 0 0; line-height:1.5; }
+@media(max-width:650px) { .interaction-insight-grid { grid-template-columns:1fr; } }
 /* Browse: bounded flex column so #memory-list gets remaining height (not 0px).
    height:min(78vh,max-content) gives a definite cap when long, natural height
    when short. flex-basis:auto (not 0) on the list avoids collapse in auto-sized

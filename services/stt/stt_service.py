@@ -87,14 +87,17 @@ class STTService:
                 return None
         return self._whisper_model
 
-    def _transcribe_local(self, audio_bytes: bytes, language: str = "") -> Optional[str]:
+    def _transcribe_local(self, audio_bytes: bytes, language: str = "", filename: str = "audio.webm") -> Optional[str]:
         model = self._get_whisper()
         if not model:
             return None
         tmp_path = None
         try:
             # Write to temp file (faster-whisper needs a file path or file-like)
-            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+            suffix = Path(filename).suffix.lower()
+            if suffix not in {".webm", ".mp4", ".m4a", ".ogg", ".wav", ".mp3", ".mpeg"}:
+                suffix = ".webm"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
 
@@ -116,7 +119,7 @@ class STTService:
 
     # ── API endpoint ──
 
-    def _transcribe_api(self, audio_bytes: bytes, endpoint_id: str, model: str, language: str = "") -> Optional[str]:
+    def _transcribe_api(self, audio_bytes: bytes, endpoint_id: str, model: str, language: str = "", filename: str = "audio.webm", content_type: str = "audio/webm") -> Optional[str]:
         from src.database import SessionLocal, ModelEndpoint
 
         db = SessionLocal()
@@ -135,7 +138,7 @@ class STTService:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        files = {"file": ("audio.webm", io.BytesIO(audio_bytes), "audio/webm")}
+        files = {"file": (filename, io.BytesIO(audio_bytes), content_type)}
         data = {"model": model or "whisper-1"}
         if language:
             data["language"] = language
@@ -153,7 +156,7 @@ class STTService:
 
     # ── Public interface ──
 
-    def transcribe(self, audio_bytes: bytes) -> Optional[str]:
+    def transcribe(self, audio_bytes: bytes, filename: str = "audio.webm", content_type: str = "audio/webm") -> Optional[str]:
         settings = self._load_settings()
         if settings.get("stt_enabled") is False:
             return None
@@ -165,10 +168,10 @@ class STTService:
             return None
 
         if provider == "local":
-            return self._transcribe_local(audio_bytes, language)
+            return self._transcribe_local(audio_bytes, language, filename)
         elif provider.startswith("endpoint:"):
             endpoint_id = provider.split(":", 1)[1]
-            return self._transcribe_api(audio_bytes, endpoint_id, model, language)
+            return self._transcribe_api(audio_bytes, endpoint_id, model, language, filename, content_type)
         else:
             logger.error(f"Unknown STT provider: {provider}")
             return None

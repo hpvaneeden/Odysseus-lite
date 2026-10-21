@@ -19,11 +19,30 @@ let recordingInterval = null;
 // Browser STT state
 let _recognition = null;
 let _browserTranscript = '';
+let _browserSttError = '';
 let _recognitionEndPromise = null;
 let _resolveRecognitionEnd = null;
 
 // Cached STT provider — refreshed on settings change
 let _sttProvider = 'disabled';
+
+function getRecordingMimeType() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  if (typeof MediaRecorder.isTypeSupported !== 'function') return '';
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/mp4',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+  ];
+  return candidates.find(type => MediaRecorder.isTypeSupported?.(type)) || '';
+}
+
+function getAudioExtension(mimeType) {
+  if (mimeType.includes('mp4') || mimeType.includes('aac')) return 'mp4';
+  if (mimeType.includes('ogg')) return 'ogg';
+  return 'webm';
+}
 
 function _dispatchSTTState(state) {
   window.dispatchEvent(new CustomEvent('odysseus-stt-state', { detail: { state } }));
@@ -80,13 +99,14 @@ function _resetRecordingUI() {
  */
 function startBrowserSTT() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) return;
+  if (!SpeechRecognition) throw new Error('Browser speech recognition is not supported here. Select Local Whisper or a transcription endpoint in Settings.');
 
   _browserTranscript = '';
+  _browserSttError = '';
   _recognition = new SpeechRecognition();
   _recognition.continuous = true;
   _recognition.interimResults = false;
-  _recognition.lang = '';
+  _recognition.lang = navigator.language || 'en-US';
   _recognitionEndPromise = new Promise(resolve => { _resolveRecognitionEnd = resolve; });
 
   _recognition.onresult = (event) => {
@@ -98,6 +118,7 @@ function startBrowserSTT() {
   };
 
   _recognition.onerror = (e) => {
+    _browserSttError = e.error || 'unknown';
     console.warn('Browser STT error:', e.error);
   };
 
@@ -132,9 +153,9 @@ async function stopBrowserSTT() {
 /**
  * Send audio to server for transcription
  */
-async function transcribeOnServer(audioBlob) {
+async function transcribeOnServer(audioBlob, filename) {
   const formData = new FormData();
-  formData.append('file', audioBlob, 'audio.webm');
+  formData.append('file', audioBlob, filename);
 
   const res = await fetch('/api/stt/transcribe', {
     method: 'POST',
@@ -190,9 +211,24 @@ export function startRecording(onFileCreated, showToast, showError, onTranscript
 
   audioChunks = [];
 
+  const mimeType = getRecordingMimeType();
+  if (typeof MediaRecorder === 'undefined') {
+    if (showError) showError('Audio recording is not supported by this browser.');
+    _dispatchSTTState('error');
+    _resetRecordingUI();
+    return;
+  }
+
+  if (_sttProvider === 'browser' && !(window.SpeechRecognition || window.webkitSpeechRecognition)) {
+    if (showError) showError('This browser can record audio but cannot transcribe it directly. Select Local Whisper or a transcription endpoint in Settings.');
+    _dispatchSTTState('error');
+    _resetRecordingUI();
+    return;
+  }
+
   navigator.mediaDevices.getUserMedia({ audio: true })
     .then(stream => {
-      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
 
       mediaRecorder.ondataavailable = event => {
         if (event.data.size > 0) {
@@ -203,7 +239,10 @@ export function startRecording(onFileCreated, showToast, showError, onTranscript
       mediaRecorder.onstop = async () => {
         _dispatchSTTState('processing');
 
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        const recordedType = mediaRecorder.mimeType || mimeType || audioChunks[0]?.type || 'audio/webm';
+        const audioBlob = new Blob(audioChunks, { type: recordedType });
+        const extension = getAudioExtension(recordedType);
+        const filename = `voice-message-${Date.now()}.${extension}`;
         const provider = _sttProvider;
         // Let browser recognition flush its final result before closing the
         // microphone stream. Some browsers deliver that result after stop().
@@ -216,15 +255,19 @@ export function startRecording(onFileCreated, showToast, showError, onTranscript
             insertTranscription(transcript, showToast);
             if (onTranscription) onTranscription(transcript);
           } else {
-            if (showToast) showToast('No speech detected');
-            const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
+            if (_browserSttError) {
+              if (showError) showError(`Browser transcription failed (${_browserSttError}). Try Local Whisper or a transcription endpoint in Settings.`);
+            } else if (showToast) {
+              showToast('No speech detected');
+            }
+            const audioFile = new File([audioBlob], filename, { type: recordedType });
             if (onFileCreated) onFileCreated(audioFile);
           }
         } else if (provider === 'local' || provider.startsWith('endpoint:')) {
           // Show "Transcribing..." feedback
           if (showToast) showToast('Transcribing...', 5000);
           try {
-            const transcript = await transcribeOnServer(audioBlob);
+            const transcript = await transcribeOnServer(audioBlob, filename);
             if (transcript) {
               insertTranscription(transcript, showToast);
               if (onTranscription) onTranscription(transcript);
@@ -235,12 +278,12 @@ export function startRecording(onFileCreated, showToast, showError, onTranscript
             console.error('STT transcription error:', e);
             if (showError) showError('Transcription failed: ' + e.message);
             // Fallback: attach as file
-            const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
+            const audioFile = new File([audioBlob], filename, { type: recordedType });
             if (onFileCreated) onFileCreated(audioFile);
           }
         } else {
           // STT disabled — attach audio file
-          const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
+          const audioFile = new File([audioBlob], filename, { type: recordedType });
           if (onFileCreated) onFileCreated(audioFile);
         }
 

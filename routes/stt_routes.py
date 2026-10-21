@@ -36,7 +36,11 @@ def setup_stt_routes(stt_service):
             if not audio_bytes:
                 raise HTTPException(status_code=400, detail={"message": "Empty audio file"})
 
-            text = stt_service.transcribe(audio_bytes)
+            text = stt_service.transcribe(
+                audio_bytes,
+                filename=file.filename or "audio.webm",
+                content_type=file.content_type or "audio/webm",
+            )
             if text is None:
                 raise HTTPException(
                     status_code=500,

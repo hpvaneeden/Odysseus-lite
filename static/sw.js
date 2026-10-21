@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'odysseus-v385-mcp-image-render';
+const CACHE_NAME = 'odysseus-v386-mobile-audio';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -54,7 +54,7 @@ const PRECACHE = [
   '/static/js/tourHints.js',
   '/static/js/fileHandler.js',
   '/static/js/voiceRecorder.js',
-  '/static/js/voiceRecorder.js?v=20261021voice1',
+  '/static/js/voiceRecorder.js?v=20261021mobileaudio1',
   '/static/js/voiceMode.js?v=20261021voice2',
   '/static/js/models.js',
   '/static/js/rag.js',

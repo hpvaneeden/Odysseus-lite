@@ -3490,6 +3490,34 @@ def _tool_call_signature(tool_name: str, content: str) -> str:
     return f"{tool_name}:{_normalize_tool_call_args(content)}"
 
 
+def _filter_approved_tool_replays(
+    tool_blocks: list,
+    converted_calls: list,
+    approved_signature: Optional[str],
+) -> tuple:
+    """Drop an exact tool call already executed during approval resumption.
+
+    The approved result is injected into the resumed model context before the
+    first model round. Small models can still emit the same call again; compare
+    normalized arguments and preserve the alignment between blocks and native
+    calls while removing only that duplicate action.
+    """
+    if not approved_signature:
+        return tool_blocks, converted_calls, 0
+
+    kept_blocks = []
+    kept_calls = []
+    replayed = 0
+    for index, block in enumerate(tool_blocks):
+        if _tool_call_signature(block.tool_type, block.content or "") == approved_signature:
+            replayed += 1
+            continue
+        kept_blocks.append(block)
+        if index < len(converted_calls):
+            kept_calls.append(converted_calls[index])
+    return kept_blocks, kept_calls, replayed
+
+
 def _near_identical_tool_args(left: str, right: str) -> bool:
     if left == right:
         return True
@@ -4665,6 +4693,7 @@ async def stream_agent_loop(
         return _filter_route_tool_schemas(schemas)
 
     _approved_result_injected = False
+    _approved_action_signature = None
     if exact_approval is not None:
         approved = exact_approval.pending
         approved_block = ToolBlock(approved.tool_name, approved.content)
@@ -4742,6 +4771,10 @@ async def stream_agent_loop(
         total_tool_calls += 1
 
         if tool_result_is_successful(approved_result):
+            _approved_action_signature = _tool_call_signature(
+                approved.tool_name,
+                approved.content,
+            )
             for doc_event in _document_stream_events(approved_block):
                 yield f"data: {json.dumps(doc_event)}\n\n"
         if approved_result.get("action") == "suggest":
@@ -5521,6 +5554,35 @@ async def stream_agent_loop(
                     })
                     yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
                     continue
+
+        if _approved_action_signature and round_num == 1 and tool_blocks:
+            tool_blocks, converted_calls, _replayed_approved_calls = (
+                _filter_approved_tool_replays(
+                    tool_blocks,
+                    converted_calls,
+                    _approved_action_signature,
+                )
+            )
+            if _replayed_approved_calls:
+                logger.warning(
+                    "[agent] suppressed %d exact replay(s) of an already-approved tool action",
+                    _replayed_approved_calls,
+                )
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "The exact tool action you just proposed has already run "
+                        "after the user approved it. Its result is in the context. "
+                        "Do not repeat that action; continue with any distinct "
+                        "remaining work or give the user the result."
+                    ),
+                })
+                if used_native:
+                    native_tool_calls = converted_calls
+                if not tool_blocks:
+                    used_native = False
+                    native_tool_calls = []
+                    _force_answer = True
 
         # Force-answer round: we told the model to STOP calling tools and
         # answer. If it ignored that and emitted a (possibly DSML) tool

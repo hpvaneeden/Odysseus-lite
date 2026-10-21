@@ -26,6 +26,12 @@ body.voice-mode-open #voice-mode-open { display: none; }
 .voice-mode-status { min-height:24px; margin-top:12px; color:var(--voice-accent,#9cdef2); font-size:13px; text-align:center; }
 .voice-mode-caption { max-width:min(700px,92vw); max-height:16vh; overflow:auto; margin-top:12px; text-align:center; line-height:1.55; font-size:15px; white-space:pre-wrap; }
 .voice-mode-caption strong { color:var(--voice-accent,#9cdef2); }
+.voice-mode-prompt { width:min(620px,94vw); max-height:30vh; overflow:auto; margin-top:14px; }
+.voice-mode-prompt:empty { display:none; }
+.voice-mode-prompt .ask-user-card { width:100%; max-width:none; margin:0; text-align:left; }
+.voice-mode-prompt .ask-user-card[data-ask-user-kind="tool_approval"] .ask-user-close { display:none; }
+.voice-mode-main.has-prompt .voice-mode-visual { display:none; }
+.voice-mode-main.has-prompt { flex:0 1 auto; min-height:0; }
 .voice-mode-controls { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:16px; width:min(620px,100%); margin:0 auto max(18px,env(safe-area-inset-bottom)); }
 .voice-mic-button { grid-column:2; display:grid; place-items:center; width:72px; height:72px; border:1px solid color-mix(in srgb,var(--voice-accent,#9cdef2) 70%,var(--border)); border-radius:50%; background:color-mix(in srgb,var(--voice-accent,#9cdef2) 19%,var(--panel)); color:var(--voice-accent,#9cdef2) !important; box-shadow:0 0 32px color-mix(in srgb,var(--voice-accent,#9cdef2) 23%,transparent); transition:transform .18s,box-shadow .18s,background .18s; }
 .voice-mic-button:hover { transform:scale(1.05); }
@@ -44,6 +50,7 @@ body.voice-mode-open #voice-mode-open { display: none; }
 .voice-mode-overlay[data-voice-state="listening"] .voice-mode-status { color:#a8e6cf; }
 .voice-mode-overlay[data-voice-state="thinking"] .voice-mode-status { color:#c7b4ff; }
 .voice-mode-overlay[data-voice-state="speaking"] .voice-mode-status { color:var(--voice-accent,#9cdef2); }
+.voice-mode-overlay[data-voice-state="waiting"] .voice-mode-status { color:#f2cf83; }
 .voice-mode-overlay[data-voice-state="error"] .voice-mode-status { color:#f29a84; }
 @keyframes voice-listening { 0%,100% { box-shadow:0 0 24px color-mix(in srgb,var(--voice-accent,#9cdef2) 20%,transparent); } 50% { box-shadow:0 0 42px color-mix(in srgb,var(--voice-accent,#9cdef2) 52%,transparent); } }
 @media (max-width:680px) { .voice-mode-header { flex-direction:row; align-items:flex-start; } .voice-mode-header p { max-width:52vw; } .voice-mode-controls { grid-template-columns:1fr auto 1fr; gap:8px; } .voice-handsfree small { display:none; } .voice-theme-form { justify-content:flex-start; } .voice-options-panel { top:72px; } .voice-mode-caption { font-size:14px; } }

@@ -21,14 +21,18 @@ class VoiceMode {
     this.animation = null;
     this.ttsWasAutoPlay = false;
     this.pendingRearm = null;
+    this.awaitingUserChoice = false;
   }
 
-  init(recorder, ui, settings) {
+  init(recorder, ui, settings, chatRenderer) {
     this.recorder = recorder;
     this.ui = ui;
     this.settings = settings;
+    this.chatRenderer = chatRenderer;
     this.overlay = document.getElementById('voice-mode-overlay');
     this.canvas = document.getElementById('voice-mode-visual');
+    this.main = document.querySelector('.voice-mode-main');
+    this.promptSlot = document.getElementById('voice-mode-prompt');
     this.optionsPanel = document.getElementById('voice-options-panel');
     this.optionsToggle = document.getElementById('voice-options-toggle');
     if (!this.overlay || !this.canvas) return;
@@ -43,6 +47,19 @@ class VoiceMode {
     });
     document.getElementById('voice-mode-mic')?.addEventListener('click', () => this.toggleRecording());
     document.getElementById('voice-mode-stop-audio')?.addEventListener('click', () => window.aiTTSManager?.stop());
+    this.promptSlot?.addEventListener('click', event => {
+      if (event.target.closest('.ask-user-close')) {
+        this.awaitingUserChoice = false;
+        this.main?.classList.remove('has-prompt');
+        this.setState('idle', 'Ready for your next turn');
+        return;
+      }
+      if (event.target.closest('.ask-user-option, .ask-user-other-send')) {
+        this.awaitingUserChoice = false;
+        this.main?.classList.remove('has-prompt');
+        this.setState('thinking', 'Sending your choice to Odysseus…');
+      }
+    });
     document.getElementById('voice-theme-select')?.addEventListener('change', ev => this.selectTheme(ev.target.value));
     document.getElementById('voice-theme-add')?.addEventListener('click', () => this.showThemeForm(true));
     document.getElementById('voice-theme-delete')?.addEventListener('click', () => this.deleteSelectedTheme());
@@ -199,14 +216,26 @@ class VoiceMode {
     }
     document.getElementById('voice-mode-close')?.focus();
     this.setState('idle', window.aiTTSManager?.available ? 'Ready when you are' : 'Speech output is not configured');
+    const existingPrompt = document.querySelector('#chat-history .ask-user-card');
+    if (existingPrompt && this.promptSlot) {
+      this.promptSlot.replaceChildren(existingPrompt);
+      this.awaitingUserChoice = true;
+      this.main?.classList.add('has-prompt');
+      this.setState('waiting', 'Odysseus needs your choice');
+    }
     this.startAnimation();
   }
 
   close() {
     if (!this.active) return;
     this.active = false;
+    this.awaitingUserChoice = false;
     clearTimeout(this.pendingRearm);
     this.toggleOptions(false);
+    const pendingPrompt = this.promptSlot?.querySelector('.ask-user-card');
+    if (pendingPrompt) document.getElementById('chat-history')?.appendChild(pendingPrompt);
+    this.promptSlot?.replaceChildren();
+    this.main?.classList.remove('has-prompt');
     if (this.recorder?.getIsRecording()) this.recorder.stopRecording();
     window.aiTTSManager?.stop();
     if (window.aiTTSManager) window.aiTTSManager.autoPlay = this.ttsWasAutoPlay;
@@ -264,6 +293,10 @@ class VoiceMode {
     if (state === 'speaking') this.setState('speaking', 'Odysseus is speaking');
     if (state === 'idle') {
       document.getElementById('voice-mode-stop-audio').disabled = true;
+      if (this.awaitingUserChoice) {
+        this.setState('waiting', 'Odysseus needs your choice');
+        return;
+      }
       if (document.getElementById('voice-handsfree-toggle')?.checked) {
         this.scheduleRearm();
       } else {
@@ -278,6 +311,10 @@ class VoiceMode {
 
   onResponseDone() {
     if (!this.active) return;
+    if (this.awaitingUserChoice) {
+      this.setState('waiting', 'Odysseus needs your choice');
+      return;
+    }
     if (window.aiTTSManager?.isPlaying || window.aiTTSManager?._processing) {
       document.getElementById('voice-mode-stop-audio').disabled = false;
       return;
@@ -293,10 +330,43 @@ class VoiceMode {
     clearTimeout(this.pendingRearm);
     this.pendingRearm = setTimeout(() => {
       this.pendingRearm = null;
-      if (this.active && document.getElementById('voice-handsfree-toggle')?.checked && !this.recorder?.getIsRecording()) {
+      if (this.active && !this.awaitingUserChoice && document.getElementById('voice-handsfree-toggle')?.checked && !this.recorder?.getIsRecording()) {
         this.toggleRecording();
       }
     }, 700);
+  }
+
+  presentAskUser(payload) {
+    if (!this.active || !this.promptSlot || !this.chatRenderer?.renderAskUserCard) return false;
+    clearTimeout(this.pendingRearm);
+    this.pendingRearm = null;
+    this.awaitingUserChoice = true;
+    this.main?.classList.add('has-prompt');
+    this.setState('waiting', 'Odysseus needs your choice');
+    const card = this.chatRenderer.renderAskUserCard(payload, {
+      root: this.promptSlot,
+      scroll: false,
+      onSubmit: submission => {
+        this.awaitingUserChoice = false;
+        this.main?.classList.remove('has-prompt');
+        this.setState('thinking', 'Sending your choice to Odysseus…');
+        if (submission.kind === 'tool_approval') {
+          document.dispatchEvent(new CustomEvent('odysseus:tool-approval', {
+            detail: {
+              approval_id: submission.approval_id,
+              decision: submission.decision,
+              document_id: submission.document_id,
+            },
+          }));
+        } else {
+          const input = document.getElementById('message');
+          if (input) input.value = submission.text;
+          document.querySelector('.send-btn')?.click();
+        }
+        return true;
+      },
+    });
+    return !!card;
   }
 
   showCaption(text, speaker) {

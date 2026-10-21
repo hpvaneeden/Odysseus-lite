@@ -10,7 +10,7 @@ import modelsModule from './js/models.js?v=20260715startupcalm2';
 import ragModule from './js/rag.js';
 import presetsModule from './js/presets.js';
 import searchModule from './js/search.js';
-import chatModule from './js/chat.js?v=20261021voice1';
+import chatModule from './js/chat.js?v=20261021voice2';
 import compareModule from './js/compare/index.js?v=20260819approvalcontrol1';
 import documentModule from './js/document.js?v=20260815approvalsave1';
 import searchChatModule from './js/search-chat.js';
@@ -26,7 +26,7 @@ import chatRenderer from './js/chatRenderer.js?v=20260819approvalcontrol1';
 import sessionModule from './js/sessions.js';
 import memoryModule from './js/memory.js?v=20260722memoryloading1';
 import voiceRecorderModule from './js/voiceRecorder.js?v=20261021voice1';
-import voiceModeModule from './js/voiceMode.js?v=20261021voice1';
+import voiceModeModule from './js/voiceMode.js?v=20261021voice2';
 import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import { UI_VIS_DEFAULT_OFF, resolveVisibility } from './js/ui_visibility.js';
@@ -4350,7 +4350,7 @@ function startOdysseusApp() {
 	  window.voiceRecorderModule = voiceRecorderModule;
 	  window.voiceModeModule = voiceModeModule;
 	  voiceRecorderModule.init();
-	  voiceModeModule.init(voiceRecorderModule, uiModule, settingsModule);
+  voiceModeModule.init(voiceRecorderModule, uiModule, settingsModule, chatRenderer);
 	  if (censorModule) censorModule.init();
 
 	  // ── Mobile pull-to-refresh for the active chat ──

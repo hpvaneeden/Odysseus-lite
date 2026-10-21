@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'odysseus-v381-voice-mode';
+const CACHE_NAME = 'odysseus-v382-voice-approval';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -40,7 +40,7 @@ const KATEX_FONTS = [
 const PRECACHE = [
   '/',
   '/static/style.css',
-  '/static/voice-mode.css?v=20261021voice1',
+  '/static/voice-mode.css?v=20261021voice2',
   '/static/app.js',
   '/static/app.js?v=20261021voice1',
   '/static/js/storage.js',
@@ -55,7 +55,7 @@ const PRECACHE = [
   '/static/js/fileHandler.js',
   '/static/js/voiceRecorder.js',
   '/static/js/voiceRecorder.js?v=20261021voice1',
-  '/static/js/voiceMode.js?v=20261021voice1',
+  '/static/js/voiceMode.js?v=20261021voice2',
   '/static/js/models.js',
   '/static/js/rag.js',
   '/static/js/presets.js',
@@ -69,7 +69,7 @@ const PRECACHE = [
   '/static/js/codeRunner.js',
   '/static/js/chatStream.js',
   '/static/js/chat.js',
-  '/static/js/chat.js?v=20261021voice1',
+  '/static/js/chat.js?v=20261021voice2',
   '/static/js/cookbook.js',
   '/static/js/search-chat.js',
   '/static/js/compare/index.js',

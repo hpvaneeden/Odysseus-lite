@@ -3816,7 +3816,10 @@ import { loadPanel } from './panels.js';
                 // versions have identical behavior.
                 _cancelThinkingTimer();
                 _removeThinkingSpinner();
-                chatRenderer.renderAskUserCard(json.data || {});
+                const askUserPayload = json.data || {};
+                if (!window.voiceModeModule?.presentAskUser?.(askUserPayload)) {
+                  chatRenderer.renderAskUserCard(askUserPayload);
+                }
 
               } else if (json.type === 'plan_update') {
                 if (_isBg) continue;

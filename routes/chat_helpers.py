@@ -827,26 +827,31 @@ async def build_chat_context(
     # stale normal session id. Only the ephemeral incognito transcript is safe.
     messages = preface + (_incognito_messages(session_id) if incognito else sess.get_context_messages())
 
-    # Current date/time — injected as a standalone *user*-role context message
-    # placed immediately before the latest user turn, NOT folded into the
-    # system prompt. Its text changes every minute, and local OpenAI-compatible
-    # backends (llama.cpp / LM Studio) key their KV-cache prefix off the
-    # system message byte-for-byte; mixing ever-changing timestamp text into
-    # it would invalidate the cached prefix on every request (issue #2927).
-    # Placing it at the tail also keeps it out of the stable
-    # preface+history prefix, so that prefix stays byte-identical turn over
-    # turn (modulo the genuinely new history entries) and the cache survives.
+    # Inject clock context only when the latest user turn asks about or depends
+    # on dates/times. A standalone user-role clock message on every turn can be
+    # mistaken for the subject of a short follow-up such as "are you sure?".
+    # Keep relevant clock context near the tail for KV-cache stability.
     if not agent_mode:
         try:
-            from src.user_time import current_datetime_context_message
-            _dt_msg = current_datetime_context_message()
-            if messages and messages[-1].get("role") == "user":
-                messages.insert(len(messages) - 1, _dt_msg)
-            else:
-                messages.append(_dt_msg)
+            from src.user_time import (
+                current_datetime_context_message,
+                needs_current_datetime_context,
+            )
+            _latest_user_index = next(
+                (i for i in range(len(messages) - 1, -1, -1)
+                 if messages[i].get("role") == "user"),
+                None,
+            )
+            if (
+                _latest_user_index is not None
+                and needs_current_datetime_context(
+                    messages[_latest_user_index].get("content")
+                )
+            ):
+                _dt_msg = current_datetime_context_message()
+                messages.insert(_latest_user_index, _dt_msg)
         except Exception:
             logger.debug("Failed to add current date/time context", exc_info=True)
-
     messages = compact_social_history(messages)
     route_messages = list(messages)
     # Explicit fallback routing must shape from the same route-neutral prompt

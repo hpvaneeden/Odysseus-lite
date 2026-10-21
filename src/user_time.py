@@ -212,8 +212,40 @@ def current_datetime_context_message_for_tz(
     }
 
 
+_DATETIME_REFERENCE_RE = re.compile(
+    r"\b(?:today|tomorrow|yesterday|tonight|calendar|schedule|scheduled|"
+    r"reminder|appointment|meeting|timezone|time zone|utc)\b|"
+    r"\b(?:current|local)\s+(?:date|time|day|week|month|year)\b|"
+    r"\bwhat(?:'s|\s+is)?\s+(?:the\s+)?(?:date|time|day)\b|"
+    r"\b(?:date|time)\s+(?:today|tomorrow|yesterday|tonight)\b|"
+    r"\b(?:this|next|last)\s+(?:week|month|year|weekend|weekday|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|"
+    r"\b(?:in|within)\s+\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\b|"
+    r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b|"
+    r"\b\d{4}-\d{2}-\d{2}\b|"
+    r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december)"
+    r"\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?\b|"
+    r"\b\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.IGNORECASE,
+)
+
+def needs_current_datetime_context(content) -> bool:
+    """Return whether a user message asks for or depends on current time/date."""
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = " ".join(
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    else:
+        text = str(content or "")
+    return bool(_DATETIME_REFERENCE_RE.search(text))
+
+
 def current_datetime_context_message(now_utc: Optional[datetime] = None) -> Dict[str, str]:
-    """Build the current-date/time context as a standalone chat message.
+    """Build standalone date/time context for a date-sensitive chat turn.
 
     This intentionally returns a ``user``-role message rather than a
     ``system``-role one. The text changes every turn (it embeds the current

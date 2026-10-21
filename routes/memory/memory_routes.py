@@ -560,6 +560,17 @@ def setup_memory_routes(memory_manager: MemoryManager, session_manager: SessionM
             raise HTTPException(503, "Interaction state is temporarily unavailable; no changes were made.")
         return {"ok": True, "cleared": cleared}
 
+    @router.delete("/affective-state")
+    def clear_affective_state(request: Request):
+        """Reset this owner's simulated assistant and explicit user affect."""
+        from services.memory.affective_state import reset_affective_state
+        try:
+            cleared = reset_affective_state(memory_manager, owner=_owner(request))
+        except Exception as e:
+            logger.error("Could not reset affective state: %s", e)
+            raise HTTPException(503, "Affective state is temporarily unavailable; no changes were made.")
+        return {"ok": True, "cleared": cleared}
+
     @router.delete("/{memory_id}")
     def delete_memory(request: Request, memory_id: str):
         """Delete a memory item by its ID."""

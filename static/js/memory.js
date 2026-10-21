@@ -193,6 +193,8 @@ async function syncToggles() {
   await syncPrefToggle('auto-memory-toggle', 'auto_memory', 'Auto-extract memories enabled', 'Auto-extract memories disabled', false);
   await syncPrefToggle('auto-experience-toggle', 'auto_experience', 'Interaction feedback recording enabled', 'Interaction feedback recording disabled', false, false);
   await syncPrefToggle('emotional-state-toggle', 'emotional_state_enabled', 'Response adaptation enabled', 'Response adaptation disabled', false, false);
+  await syncPrefToggle('assistant-emotions-toggle', 'assistant_emotions_enabled', 'Odysseus task emotions enabled', 'Odysseus task emotions disabled', false, false);
+  await syncPrefToggle('user-emotion-recording-toggle', 'user_emotion_recording_enabled', 'Explicit emotion recording enabled', 'Explicit emotion recording disabled', false, false);
   await syncPrefToggle('auto-skills-toggle', 'auto_skills', 'Auto-extract skills enabled', 'Auto-extract skills disabled', false);
   await syncPrefToggle('auto-approve-skills-toggle', 'auto_approve_skills', 'Auto-approve skills enabled', 'Auto-approve skills disabled', false);
   await syncPrefSlider('skill-confidence-slider', 'skill_min_confidence', 'skill-confidence-label', 0.85);
@@ -210,6 +212,22 @@ async function syncToggles() {
       } catch (e) {
         console.error('Failed to reset interaction state:', e);
         showError('Failed to reset interaction state');
+      }
+    });
+  }
+
+  const resetAffectiveState = document.getElementById('affective-state-reset');
+  if (resetAffectiveState && !resetAffectiveState.dataset.bound) {
+    resetAffectiveState.dataset.bound = '1';
+    resetAffectiveState.addEventListener('click', async () => {
+      if (!await uiModule.styledConfirm('Reset the saved Odysseus task emotions and explicit user emotion state for this account?', { confirmText: 'Reset both', danger: true })) return;
+      try {
+        const res = await fetch(`${window.location.origin}/api/memory/affective-state`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`Reset returned ${res.status}`);
+        showToast('Both emotion states reset');
+      } catch (e) {
+        console.error('Failed to reset affective state:', e);
+        showError('Failed to reset emotion states');
       }
     });
   }

@@ -328,7 +328,7 @@ class VoiceMode {
       glow.addColorStop(0, `${color}44`); glow.addColorStop(.7, `${color}18`); glow.addColorStop(1, `${color}00`);
       ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(x, y, radius * 1.5, 0, Math.PI * 2); ctx.fill();
       ctx.shadowBlur = 0;
-      if (theme.base === 'matrix') this.drawDotFace(ctx, x, y, radius, color, time, state);
+      if (theme.base === 'matrix') this.drawDotFace(ctx, x, y, radius, color, time, state, rect.width);
       else this.drawSignal(ctx, x, y, radius, color, time, energy, state);
       ctx.restore();
       this.animation = requestAnimationFrame(frame);
@@ -359,19 +359,55 @@ class VoiceMode {
     ctx.globalAlpha = 1;
   }
 
-  drawDotFace(ctx, x, y, radius, color, time, state) {
-    const step = radius * .14, half = 10;
+  drawDotFace(ctx, x, y, radius, color, time, state, canvasWidth) {
+    const step = radius * .073, halfX = 16, halfY = 18;
+    const faceWidth = halfX * step;
+    const waveY = y + radius * .72;
+    const speaking = state === 'speaking' || state === 'listening';
+    // Dotted sound lines sit behind the face, with more activity while either
+    // side of the conversation is producing audio.
+    ctx.save();
+    const waveDots = Math.max(0, Math.min(58, Math.floor((canvasWidth / 2 - faceWidth - 12) / (step * .42))));
+    for (const direction of [-1, 1]) {
+      for (let i = 0; i < waveDots; i++) {
+        const distance = faceWidth + 10 + i * step * .42;
+        const pulse = speaking
+          ? Math.abs(Math.sin(time / (state === 'speaking' ? 78 : 115) + i * .58))
+          : .12 + Math.abs(Math.sin(time / 720 + i * .25)) * .12;
+        const spread = (2 + pulse * (state === 'speaking' ? 22 : 17)) * Math.exp(-i / 78);
+        for (const row of [-1, 0, 1]) {
+          const offset = row * spread * .62;
+          ctx.globalAlpha = Math.max(.04, .62 - i * .008) * (row === 0 ? .9 : .58);
+          ctx.beginPath();
+          ctx.arc(x + direction * distance, waveY + offset, row === 0 ? 1.15 : .9, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+        }
+      }
+    }
+    ctx.restore();
+
+    // A denser point cloud gives the face its projected-mesh feel while the
+    // eye, nose and mouth contours stay legible at laptop and phone sizes.
     ctx.fillStyle = color;
-    for (let row = -half; row <= half; row++) for (let col = -half; col <= half; col++) {
-      const nx = col / half, ny = row / half;
-      const face = nx * nx / .82 + (ny + .03) * (ny + .03) / 1.02 < 1;
+    for (let row = -halfY; row <= halfY; row++) for (let col = -halfX; col <= halfX; col++) {
+      const nx = col / halfX, ny = row / halfY;
+      const face = nx * nx / .74 + (ny + .015) * (ny + .015) / .99 < 1;
       if (!face) continue;
-      const eye = Math.abs(nx) > .27 && Math.abs(nx) < .57 && ny > -.26 && ny < -.08;
-      const mouthRegion = Math.abs(nx) < .42 && ny > .28 && ny < .47;
-      const nose = Math.abs(nx) < .09 && ny > -.05 && ny < .25;
-      const modulation = state === 'speaking' && mouthRegion ? Math.abs(Math.sin(time / 110 + col * .4)) : state === 'listening' ? .45 + .35 * Math.sin(time / 600 - col * .2) : state === 'thinking' ? .45 + .25 * Math.sin(time / 900 - row * .25) : .45;
-      const r = eye ? 2.25 : mouthRegion ? 1.7 + modulation * 1.3 : nose ? 1.8 : 1.35;
-      ctx.globalAlpha = eye || (mouthRegion && state === 'speaking') ? .9 : .24 + Math.max(0, modulation) * .34;
+      const eye = Math.abs(nx) > .26 && Math.abs(nx) < .62 && ny > -.32 && ny < -.12;
+      const eyeGap = Math.abs(nx) > .37 && Math.abs(nx) < .51 && ny > -.28 && ny < -.17;
+      const mouthRegion = Math.abs(nx) < .42 && ny > .34 && ny < .52;
+      const nose = Math.abs(nx) < .13 && ny > -.09 && ny < .29;
+      const modulation = state === 'speaking' && mouthRegion
+        ? Math.abs(Math.sin(time / 92 + col * .34))
+        : state === 'listening'
+          ? .4 + .4 * Math.sin(time / 390 - col * .25)
+          : state === 'thinking'
+            ? .4 + .28 * Math.sin(time / 760 - row * .22)
+            : .38 + .12 * Math.sin(time / 1200 + col * .1);
+      if (eyeGap) continue;
+      const r = eye ? 1.42 : mouthRegion ? 1.05 + modulation * 1.05 : nose ? 1.28 : 1.05;
+      ctx.globalAlpha = eye || (mouthRegion && state === 'speaking') ? .88 : .18 + Math.max(0, modulation) * .48;
       ctx.beginPath(); ctx.arc(x + col * step, y + row * step, r, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1;

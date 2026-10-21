@@ -3029,6 +3029,21 @@ def _resolve_tool_blocks(
                         label = description[5:].split("]", 1)[0].split(" (", 1)[0]
                     if server_label.casefold() in {parts[1].casefold(), label.casefold()}:
                         matches.append(qualified)
+                # Some providers rewrite or omit the MCP display label while
+                # retaining the function suffix (e.g. diffuser__generate_image).
+                # If the label did not match, accept the suffix only when it
+                # identifies exactly one MCP function advertised this round.
+                # This remains bounded by the active tool schema list and avoids
+                # guessing when multiple servers expose the same function.
+                if not matches and tool_name:
+                    for schema in advertised_tool_schemas or ():
+                        fn = schema.get("function", {}) if isinstance(schema, dict) else {}
+                        qualified = fn.get("name", "") if isinstance(fn, dict) else ""
+                        if not qualified.startswith("mcp__"):
+                            continue
+                        parts = qualified.split("__", 2)
+                        if len(parts) == 3 and parts[2] == tool_name:
+                            matches.append(qualified)
                 if len(matches) == 1:
                     normalized_name = matches[0]
             block = function_call_to_tool_block(normalized_name, tc_args)

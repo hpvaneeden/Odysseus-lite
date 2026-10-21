@@ -12,6 +12,8 @@ body.voice-mode-open #voice-mode-open { display: none; }
 .voice-mode-header h2 { margin:0; font-size:18px; font-weight:650; }
 .voice-mode-header p { margin:5px 0 0; color:color-mix(in srgb,var(--fg) 60%,transparent); font-size:12px; }
 .voice-mode-head-actions { display:flex; gap:8px; align-items:center; }
+.voice-options-panel { position:absolute; z-index:4; top:74px; right:clamp(16px,calc((100vw - 1040px)/2),34px); width:min(380px,calc(100vw - 32px)); padding:14px; border:1px solid color-mix(in srgb,var(--border) 90%,transparent); border-radius:12px; background:color-mix(in srgb,var(--panel) 97%,var(--bg)); box-shadow:0 18px 54px #0008; }
+.voice-options-row { display:grid; grid-template-columns:1fr auto auto auto; align-items:center; gap:8px; }
 .voice-theme-picker-label { color:color-mix(in srgb,var(--fg) 62%,transparent); font-size:12px; }
 .voice-mode-overlay select,.voice-theme-form input { min-height:34px; border:1px solid var(--border); border-radius:7px; padding:5px 9px; color:var(--fg); background:var(--panel); }
 .voice-mode-overlay button { color:var(--fg); cursor:pointer; }
@@ -31,17 +33,18 @@ body.voice-mode-open #voice-mode-open { display: none; }
 .voice-stop-icon { display:none; }
 .voice-mic-button.is-recording .voice-mic-icon { display:none; }
 .voice-mic-button.is-recording .voice-stop-icon { display:block; }
-.voice-handsfree { display:grid; grid-template-columns:auto 1fr; align-items:center; gap:2px 8px; color:var(--fg); font-size:12px; }
+.voice-handsfree { display:grid; grid-template-columns:auto 1fr; align-items:center; gap:2px 8px; margin-top:12px; padding-top:12px; border-top:1px solid color-mix(in srgb,var(--border) 70%,transparent); color:var(--fg); font-size:12px; }
 .voice-handsfree input { grid-row:span 2; accent-color:var(--voice-accent,#9cdef2); }
 .voice-handsfree small { color:color-mix(in srgb,var(--fg) 55%,transparent); font-size:10px; }
 #voice-mode-stop-audio { justify-self:end; }
-.voice-theme-form { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; justify-content:center; width:min(780px,100%); margin:-8px auto 12px; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--panel); }
+.voice-theme-form { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; justify-content:flex-start; width:auto; margin:12px 0 0; padding:12px 0 0; border:0; border-top:1px solid color-mix(in srgb,var(--border) 70%,transparent); background:transparent; }
 .voice-theme-form label { display:grid; gap:5px; color:color-mix(in srgb,var(--fg) 65%,transparent); font-size:11px; }
 .voice-theme-form input[type="color"] { width:64px; padding:3px; }
+.voice-theme-form-actions { display:flex; gap:8px; }
 .voice-mode-overlay[data-voice-state="listening"] .voice-mode-status { color:#a8e6cf; }
 .voice-mode-overlay[data-voice-state="thinking"] .voice-mode-status { color:#c7b4ff; }
 .voice-mode-overlay[data-voice-state="speaking"] .voice-mode-status { color:var(--voice-accent,#9cdef2); }
 .voice-mode-overlay[data-voice-state="error"] .voice-mode-status { color:#f29a84; }
 @keyframes voice-listening { 0%,100% { box-shadow:0 0 24px color-mix(in srgb,var(--voice-accent,#9cdef2) 20%,transparent); } 50% { box-shadow:0 0 42px color-mix(in srgb,var(--voice-accent,#9cdef2) 52%,transparent); } }
-@media (max-width:680px) { .voice-mode-header { flex-direction:column; } .voice-mode-head-actions { width:100%; flex-wrap:wrap; } .voice-mode-controls { grid-template-columns:1fr auto 1fr; gap:8px; } .voice-handsfree small { display:none; } .voice-theme-form { justify-content:flex-start; } .voice-mode-caption { font-size:14px; } }
+@media (max-width:680px) { .voice-mode-header { flex-direction:row; align-items:flex-start; } .voice-mode-header p { max-width:52vw; } .voice-mode-controls { grid-template-columns:1fr auto 1fr; gap:8px; } .voice-handsfree small { display:none; } .voice-theme-form { justify-content:flex-start; } .voice-options-panel { top:72px; } .voice-mode-caption { font-size:14px; } }
 @media (prefers-reduced-motion:reduce) { .voice-mode-overlay *, .voice-mode-overlay *::before { animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; } }

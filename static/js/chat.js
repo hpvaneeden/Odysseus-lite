@@ -10,7 +10,7 @@ import uiModule from './ui.js';
 import sessionModule from './sessions.js';
 import chatRenderer from './chatRenderer.js?v=20260819approvalcontrol1';
 import chatStream from './chatStream.js?v=20260819approvalcontrol1';
-import { addAITTSButton } from './tts-ai.js';
+import { addAITTSButton } from './tts-ai.js?v=20261021voice1';
 import markdownModule from './markdown.js';
 import spinnerModule from './spinner.js';
 import presetsModule from './presets.js';
@@ -4243,6 +4243,10 @@ import { loadPanel } from './panels.js';
             }
           }
         }
+        if (accumulated) {
+          window.dispatchEvent(new CustomEvent('odysseus-chat-response', { detail: { text: accumulated } }));
+        }
+        window.dispatchEvent(new CustomEvent('odysseus-chat-response-done'));
         if (metrics) {
           displayMetrics(_metricsTargetForTurn() || footerTarget, metrics);
         }

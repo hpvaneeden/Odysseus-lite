@@ -30,6 +30,10 @@ class AITTSManager {
         this.checkAvailability();
     }
 
+    _notifyVoiceState(state) {
+        window.dispatchEvent(new CustomEvent('odysseus-tts-state', { detail: { state } }));
+    }
+
     async checkAvailability() {
         try {
             // Check user setting first — if TTS is disabled in settings, don't show buttons.
@@ -218,6 +222,7 @@ class AITTSManager {
 
             window.speechSynthesis.speak(utterance);
             this.isPlaying = true;
+            this._notifyVoiceState('speaking');
         });
     }
 
@@ -247,6 +252,7 @@ class AITTSManager {
             this.currentAudio = null;
             this.isPlaying = false;
         }
+        this._notifyVoiceState('stopped');
     }
 
     /**
@@ -278,6 +284,7 @@ class AITTSManager {
         }
 
         this._processing = false;
+        if (!this._streamActive) this._notifyVoiceState('idle');
     }
 
     async _playQueueItem(item) {
@@ -334,6 +341,7 @@ class AITTSManager {
                     };
                     audio.play().then(() => {
                         this.isPlaying = true;
+                        this._notifyVoiceState('speaking');
                     }).catch(reject);
                 });
             }
@@ -392,7 +400,7 @@ class AITTSManager {
         var advancedChars = 0;
         for (var j = 0; j < sentences.length; j++) {
             var sentence = sentences[j];
-            if (sentence.length < 15) {
+            if (sentence.length < (window.voiceModeModule?.active ? 1 : 15)) {
                 advancedChars += sentence.length + 1;
                 continue;
             }
@@ -436,13 +444,18 @@ class AITTSManager {
             .replace(/```[\s\S]*$/g, '');
 
         var plainText = this.extractPlainText(text);
-        if (!plainText) return;
+        if (!plainText) {
+            if (!this._processing && this._queue.length === 0) this._notifyVoiceState('idle');
+            return;
+        }
 
         var remaining = plainText.substring(this._streamSentencesSent).trim();
-        if (remaining.length >= 15) {
+        if (remaining.length >= (window.voiceModeModule?.active ? 1 : 15)) {
             var btn = this._streamButton || this._createPlaceholderButton();
             var resetFn = this._streamResetFn || function() {};
             this.enqueue(remaining, btn, resetFn);
+        } else if (!this._processing && this._queue.length === 0) {
+            this._notifyVoiceState('idle');
         }
         this._streamSentencesSent = 0;
     }

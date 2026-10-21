@@ -3008,22 +3008,29 @@ def _resolve_tool_blocks(
                 elif "__" in tc_name:
                     server_label, tool_name = tc_name.split("__", 1)
                 else:
-                    server_label, tool_name = "", ""
+                    # Some local models return only the MCP server display name
+                    # (for example, "diffuser") and omit the function name.
+                    # Recover it only when that server exposed exactly one
+                    # function in this request; an ambiguous namespace remains
+                    # rejected rather than guessing which tool to run.
+                    server_label, tool_name = tc_name, ""
+                matches = []
                 for schema in advertised_tool_schemas or ():
                     fn = schema.get("function", {}) if isinstance(schema, dict) else {}
                     qualified = fn.get("name", "") if isinstance(fn, dict) else ""
                     if not qualified.startswith("mcp__"):
                         continue
                     parts = qualified.split("__", 2)
-                    if len(parts) != 3 or parts[2] != tool_name:
+                    if len(parts) != 3 or (tool_name and parts[2] != tool_name):
                         continue
                     description = fn.get("description", "")
                     label = ""
                     if isinstance(description, str) and description.startswith("[MCP:"):
                         label = description[5:].split("]", 1)[0].split(" (", 1)[0]
-                    if server_label and server_label.casefold() in {parts[1].casefold(), label.casefold()}:
-                        normalized_name = qualified
-                        break
+                    if server_label.casefold() in {parts[1].casefold(), label.casefold()}:
+                        matches.append(qualified)
+                if len(matches) == 1:
+                    normalized_name = matches[0]
             block = function_call_to_tool_block(normalized_name, tc_args)
             if block:
                 tool_blocks.append(block)

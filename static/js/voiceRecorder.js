@@ -23,6 +23,10 @@ let _browserTranscript = '';
 // Cached STT provider — refreshed on settings change
 let _sttProvider = 'disabled';
 
+function _dispatchSTTState(state) {
+  window.dispatchEvent(new CustomEvent('odysseus-stt-state', { detail: { state } }));
+}
+
 /**
  * Fetch current STT provider from server settings
  */
@@ -148,16 +152,18 @@ function insertTranscription(text, showToast) {
 /**
  * Start voice recording
  */
-export function startRecording(onFileCreated, showToast, showError) {
+export function startRecording(onFileCreated, showToast, showError, onTranscription = null) {
   // Check for secure context (getUserMedia requires HTTPS or localhost)
   if (!window.isSecureContext) {
     if (showError) showError('Microphone requires HTTPS. Use a reverse proxy with SSL or access via localhost.');
+    _dispatchSTTState('error');
     _resetRecordingUI();
     return;
   }
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     if (showError) showError('Microphone not supported in this browser.');
+    _dispatchSTTState('error');
     _resetRecordingUI();
     return;
   }
@@ -176,6 +182,7 @@ export function startRecording(onFileCreated, showToast, showError) {
 
       mediaRecorder.onstop = async () => {
         stream.getTracks().forEach(track => track.stop());
+        _dispatchSTTState('processing');
 
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
         const provider = _sttProvider;
@@ -184,6 +191,7 @@ export function startRecording(onFileCreated, showToast, showError) {
           const transcript = stopBrowserSTT();
           if (transcript) {
             insertTranscription(transcript, showToast);
+            if (onTranscription) onTranscription(transcript);
           } else {
             if (showToast) showToast('No speech detected');
             const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
@@ -196,6 +204,7 @@ export function startRecording(onFileCreated, showToast, showError) {
             const transcript = await transcribeOnServer(audioBlob);
             if (transcript) {
               insertTranscription(transcript, showToast);
+              if (onTranscription) onTranscription(transcript);
             } else {
               if (showToast) showToast('No speech detected');
             }
@@ -212,12 +221,14 @@ export function startRecording(onFileCreated, showToast, showError) {
           if (onFileCreated) onFileCreated(audioFile);
         }
 
+        _dispatchSTTState('ready');
         _resetRecordingUI();
       };
 
       mediaRecorder.start();
       isRecording = true;
       recordingStartTime = new Date();
+      _dispatchSTTState('listening');
 
       // Start browser STT if that's the provider
       if (_sttProvider === 'browser') {
@@ -230,6 +241,7 @@ export function startRecording(onFileCreated, showToast, showError) {
     })
     .catch(error => {
       console.error('Microphone access error:', error);
+      _dispatchSTTState('error');
       if (showError) {
         if (error.name === 'NotAllowedError') {
           showError('Microphone access denied. Check browser permissions.');

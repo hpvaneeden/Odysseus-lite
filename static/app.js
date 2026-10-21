@@ -10,7 +10,7 @@ import modelsModule from './js/models.js?v=20260715startupcalm2';
 import ragModule from './js/rag.js';
 import presetsModule from './js/presets.js';
 import searchModule from './js/search.js';
-import chatModule from './js/chat.js?v=20260819approvalcontrol1';
+import chatModule from './js/chat.js?v=20261021voice1';
 import compareModule from './js/compare/index.js?v=20260819approvalcontrol1';
 import documentModule from './js/document.js?v=20260815approvalsave1';
 import searchChatModule from './js/search-chat.js';
@@ -25,7 +25,8 @@ import markdownModule from './js/markdown.js';
 import chatRenderer from './js/chatRenderer.js?v=20260819approvalcontrol1';
 import sessionModule from './js/sessions.js';
 import memoryModule from './js/memory.js?v=20260722memoryloading1';
-import voiceRecorderModule from './js/voiceRecorder.js';
+import voiceRecorderModule from './js/voiceRecorder.js?v=20261021voice1';
+import voiceModeModule from './js/voiceMode.js?v=20261021voice1';
 import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import { UI_VIS_DEFAULT_OFF, resolveVisibility } from './js/ui_visibility.js';
@@ -47,7 +48,7 @@ import themeModule from './js/theme.js';
 import cookbookModule from './js/cookbook.js';
 import groupModule from './js/group.js';
 import * as researchPanelModule from './js/research/panel.js?v=20260630researchthumb';
-import ttsModule from './js/tts-ai.js';
+import ttsModule from './js/tts-ai.js?v=20261021voice1';
 import spinnerModule from './js/spinner.js';
 import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js';
 import { getSettings } from './js/appConfig.js';
@@ -4346,7 +4347,10 @@ function startOdysseusApp() {
 	  runNonCriticalStartup(() => memoryModule.loadMemories(), 12000);
 
 	  // Ensure proper initial state
+	  window.voiceRecorderModule = voiceRecorderModule;
+	  window.voiceModeModule = voiceModeModule;
 	  voiceRecorderModule.init();
+	  voiceModeModule.init(voiceRecorderModule, uiModule, settingsModule);
 	  if (censorModule) censorModule.init();
 
 	  // ── Mobile pull-to-refresh for the active chat ──

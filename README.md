@@ -2,6 +2,8 @@
   <img src="assets/branding/odysseus-wordmark.png" alt="Odysseus" width="238">
 </p>
 
+<h1 align="center">Odysseus Lite</h1>
+
 <p align="center">
   <strong>Odysseus Lite</strong> — a local-first AI harness that helps small language models do more with tools, memory, and a full workspace, including on constrained hardware.
 </p>
@@ -14,10 +16,6 @@
 </p>
 
 <p align="center">
-  <a href="https://repology.org/project/odysseus-ai/versions"><img src="https://repology.org/badge/vertical-allrepos/odysseus-ai.svg" alt="Packaging status"></a>
-</p>
-
-<p align="center">
   <img src="assets/branding/odysseus-browser.jpg" alt="Odysseus interface">
 </p>
 
@@ -25,11 +23,9 @@
 
 ## Quick Start
 
-> `dev` is the default branch and gets the newest changes first. Use [`main`](https://github.com/odysseus-dev/odysseus/tree/main) if you want the more curated branch.
-
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/hpvaneeden/Odysseus-lite.git
+cd Odysseus-lite
 cp .env.example .env
 docker compose up -d --build
 ```
@@ -49,9 +45,23 @@ Native installs, GPU notes, Windows/macOS instructions, HTTPS, and configuration
 - **Notes, Tasks + Calendar** — reminders, todos, scheduled agent tasks, and CalDAV sync.
 - **Extras** — gallery/image editor, themes, uploads, web search, presets, sessions, and 2FA.
 
-## Demo
+### Built for small models
 
-A full hover-to-play tour lives on the [Odysseus landing page](https://odysseus-dev.github.io/odysseus/). Its source lives under [`website/`](website/).
+Odysseus Lite keeps the model replaceable and gives it a capable harness around it. The focus is making local and compact models more useful on modest hardware:
+
+- **Evidence-based continuity** — owner-scoped memory and interaction feedback can carry useful context across chats, with privacy gates and reset controls.
+- **Opt-in adaptation** — decaying response guidance, explicit user emotion reports, and simulated task affect are separate layers; the system does not treat a mood label as a diagnosis.
+- **Reflection and inspection** — repeated interaction evidence can inform traits, while an admin-only Brain insights panel shows stored signals and state without copying chat transcripts into the dashboard.
+- **Voice interface** — browser-based speech input/output, a configurable dot-matrix face, and themes for a more direct voice interaction.
+- **Tools around the model** — MCP, web search, memory, and workspace tools let smaller models act through the harness instead of relying on model size alone.
+
+## Why I'm building this
+
+I started Odysseus Lite as a hobby project because I want small local models to be useful collaborators, even on constrained hardware. The model is the engine—or soul; the harness is its body and neural network; tools are its limbs. I’m exploring how far that idea can go when memory, tools, and a personality that develops over time work together.
+
+## Origins and attribution
+
+Odysseus Lite is an independent hobby project built from and inspired by the original [Odysseus project](https://github.com/odysseus-dev/odysseus). The original Odysseus developers created the foundation and deserve clear credit for their work. This project builds on that foundation with a particular focus on small-model support, evolving interaction, and constrained-hardware use; it is not an official Odysseus release. See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for third-party code, assets, and license notices.
 
 ## Contributing
 
@@ -59,7 +69,7 @@ Help is welcome. The best entry points are fresh-install testing, provider setup
 
 ## Security
 
-Odysseus is a self-hosted workspace with powerful local tools. Keep auth enabled, keep private data out of Git, and do not expose raw model/service ports publicly.
+Odysseus Lite is a self-hosted workspace with powerful local tools. Keep auth enabled, keep private data out of Git, and do not expose raw model/service ports publicly.
 
 - Keep `AUTH_ENABLED=true` for any network-accessible deployment.
 - Keep `LOCALHOST_BYPASS=false` outside local development.
@@ -68,11 +78,11 @@ Deployment details are in the [setup guide](website/setup.md#security-notes).
 
 ## Star History
 
-<a href="https://star-history.dera.page/#odysseus-dev/odysseus&type=date&legend=top-left">
+<a href="https://star-history.dera.page/#hpvaneeden/Odysseus-lite&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=odysseus-dev/odysseus&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=odysseus-dev/odysseus&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=odysseus-dev/odysseus&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=hpvaneeden/Odysseus-lite&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=hpvaneeden/Odysseus-lite&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=hpvaneeden/Odysseus-lite&type=date&legend=top-left" />
  </picture>
 </a>
 

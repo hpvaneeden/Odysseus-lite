@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  A self-hosted AI workspace for chat, agents, research, documents, email, notes, calendar, and local model workflows.
+  <strong>Odysseus Lite</strong> — a local-first AI harness that helps small language models do more with tools, memory, and a full workspace, including on constrained hardware.
 </p>
 
 <p align="center">

@@ -16,7 +16,8 @@ This spec covers speech behavior in:
 - settings routes in `routes/auth_routes.py`;
 - model endpoint cleanup in `routes/model_routes.py`;
 - settings/tool aliases in `src/tool_implementations.py`;
-- frontend modules `static/js/voiceRecorder.js`, `static/js/tts-ai.js`, `static/app.js`, `static/js/chat.js`, `static/js/slashCommands.js`, `static/js/keyboard-shortcuts.js`, `static/js/settings.js`, and `static/index.html`;
+- frontend modules `static/js/voiceRecorder.js`, `static/js/voiceMode.js`, `static/js/tts-ai.js`, `static/app.js`, `static/js/chat.js`, `static/js/slashCommands.js`, `static/js/keyboard-shortcuts.js`, `static/js/settings.js`, and `static/index.html`;
+- voice-mode styling in `static/voice-mode.css` and service-worker shell cache in `static/sw.js`;
 - optional dependency declarations in `requirements-optional.txt`;
 - runtime cache path `data/tts_cache/`;
 - tests covering speech service toggles, TTS speed/cache, STT temp cleanup, upload limits, settings scrubbing, and model endpoint cleanup.
@@ -54,6 +55,9 @@ Frontend behavior:
 - browser recording needs secure context and microphone permissions;
 - server transcription success inserts text into the input;
 - failed server transcription can attach the recorded audio file to chat instead; empty transcription shows a no-speech message.
+- Voice Mode is an optional full-screen chat surface. It uses the selected STT provider, submits the final transcript through the existing chat form, enables available TTS for the response, and shows the transcript plus listening/thinking/speaking states.
+- Hands-free mode is opt-in and begins another recording after a spoken response completes. The default remains tap-to-record.
+- Built-in visual themes are Signal and Dot Matrix. Users can create up to 16 per-user presets by choosing a base visual and accent color; theme data is stored through `/api/prefs/voice_themes`, never as CSS or executable markup.
 
 ## TTS
 
@@ -80,7 +84,7 @@ Route behavior:
 
 Speech providers are global settings under `data/settings.json`, with defaults in `src/settings.py`. Settings reads are scrubbed for non-admin callers, writes are admin-only, and `manage_settings` can change non-secret speech settings through aliases.
 
-Visible UI state is not complete: backend and JS speech settings exist, the TTS settings card is currently hidden, and the STT settings JS exits when its removed DOM nodes are absent.
+Speech provider settings are available in AI Defaults. Voice Mode is launched from the composer and covers the standard chat surface while active; closing it restores chat.
 
 `routes.model_routes` clears `tts_provider` and `stt_provider` references when a referenced model endpoint is deleted.
 
@@ -123,7 +127,8 @@ Missing coverage includes route-level STT/TTS success and failure shapes, auth/A
 
 ## Current Gaps
 
-- Visible speech settings UI is incomplete relative to backend settings.
+- Browser STT currently reveals its final transcript after recording stops; it does not stream interim captions while the user is speaking.
+- Custom voice themes currently vary only by base graphic and accent color; there is no theme import/export or user-authored animation system.
 - Speech routes need a deliberate API-token/scope policy.
 - Endpoint speech providers need owner-isolation or explicit global-settings documentation.
 - TTS cache needs privacy policy: owner partition, TTL, no-store response headers, or accepted global cache semantics.

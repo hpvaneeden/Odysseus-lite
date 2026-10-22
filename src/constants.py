@@ -34,6 +34,10 @@ BG_JOBS_FILE = os.path.join(DATA_DIR, "bg_jobs.json")
 VAULT_FILE = os.path.join(DATA_DIR, "vault.json")
 TIDY_CALENDAR_STATE_FILE = os.path.join(DATA_DIR, "tidy_calendar_state.json")
 SKILLS_FILE = os.path.join(DATA_DIR, "skills.json")
+# Self-definition self-model store (Slice 2). A single structured,
+# evidence-based self-description -- not a general-purpose memory system and
+# not memory.json. Written atomically via core.atomic_io.
+SELF_MODEL_FILE = os.path.join(DATA_DIR, "self_model.json")
 APP_DB = os.path.join(DATA_DIR, "app.db")
 SCHEDULED_EMAILS_DB = os.path.join(DATA_DIR, "scheduled_emails.db")
 EMAIL_CACHE_DB = os.path.join(DATA_DIR, "email_cache.db")

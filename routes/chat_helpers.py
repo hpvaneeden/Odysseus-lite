@@ -19,6 +19,7 @@ from src.model_context import estimate_tokens, get_context_length
 from src.auth_helpers import effective_user
 from src.prompt_security import untrusted_context_message
 from src.attachment_refs import attachment_ref
+from src.settings import get_setting
 from odysseus_extensions.social_skill import (
     compact_social_history,
     is_explicit_request,
@@ -762,8 +763,8 @@ async def build_chat_context(
         and not str(getattr(sess, "name", "") or "").startswith("[CMP]")
         and allow_background_extraction
         and uprefs.get("auto_memory", True)
-        and uprefs.get("auto_experience", False)
-        and uprefs.get("emotional_state_enabled", False)
+        and uprefs.get("auto_experience", get_setting("auto_experience", True))
+        and uprefs.get("emotional_state_enabled", get_setting("emotional_state_enabled", True))
     ):
         try:
             from services.memory.emotional_state import get_emotional_context
@@ -786,8 +787,8 @@ async def build_chat_context(
         and allow_background_extraction
         and uprefs.get("auto_memory", True)
         and (
-            uprefs.get("assistant_emotions_enabled", False)
-            or uprefs.get("user_emotion_recording_enabled", False)
+            uprefs.get("assistant_emotions_enabled", get_setting("assistant_emotions_enabled", True))
+            or uprefs.get("user_emotion_recording_enabled", get_setting("user_emotion_recording_enabled", True))
         )
     ):
         try:
@@ -795,8 +796,8 @@ async def build_chat_context(
             preface.extend(get_affective_context(
                 chat_processor.memory_manager,
                 owner=user,
-                assistant_enabled=uprefs.get("assistant_emotions_enabled", False),
-                user_recording_enabled=uprefs.get("user_emotion_recording_enabled", False),
+                assistant_enabled=uprefs.get("assistant_emotions_enabled", get_setting("assistant_emotions_enabled", True)),
+                user_recording_enabled=uprefs.get("user_emotion_recording_enabled", get_setting("user_emotion_recording_enabled", True)),
             ))
         except Exception:
             logger.debug("Affective context unavailable", exc_info=True)
@@ -1207,8 +1208,10 @@ async def _run_extraction_jobs_sequentially(session_id: str, jobs: list):
         for name, job in jobs:
             while _is_session_stream_active():
                 await asyncio.sleep(poll)
+            logger.debug("[bg-extract] %s job starting for session %s", name, session_id)
             try:
                 await job
+                logger.debug("[bg-extract] %s job completed for session %s", name, session_id)
             except Exception:
                 logger.warning("[bg-extract] %s extraction job failed for session %s", name, session_id, exc_info=True)
 
@@ -1268,7 +1271,7 @@ def run_post_response_tasks(
         and uprefs.get("memory_enabled", True)
         and uprefs.get("auto_memory", True)
     )
-    if affective_state_allowed and uprefs.get("assistant_emotions_enabled", False):
+    if affective_state_allowed and uprefs.get("assistant_emotions_enabled", get_setting("assistant_emotions_enabled", True)):
         from services.memory.affective_state import record_assistant_outcome
         tool_events = last_metrics.get("tool_events", []) if isinstance(last_metrics, dict) else []
         _extraction_jobs.append(("assistant_affect", record_assistant_outcome(
@@ -1276,7 +1279,7 @@ def run_post_response_tasks(
             owner=owner,
             tool_events=tool_events,
         )))
-    if affective_state_allowed and uprefs.get("user_emotion_recording_enabled", False):
+    if affective_state_allowed and uprefs.get("user_emotion_recording_enabled", get_setting("user_emotion_recording_enabled", True)):
         from services.memory.affective_state import record_user_emotion
         _extraction_jobs.append(("user_affect", record_user_emotion(
             memory_manager,
@@ -1289,9 +1292,10 @@ def run_post_response_tasks(
     # outcome acknowledgements with message-id evidence, written to the
     # canonical memory store. Queued FIRST among extraction jobs so a slow LLM
     # extraction or audit further down (bounded at 120s each) cannot delay it.
-    # Shares every memory-privacy gate below, plus the auto_experience pref —
-    # default off while this layer is under development (opt in per user via
-    # PUT /api/prefs/auto_experience with {"value": true}).
+    # Shares every memory-privacy gate below, plus the auto_experience pref.
+    # Opted in by default; users may opt out via PUT /api/prefs/auto_experience
+    # with {"value": false}. Incognito, compare, and no-memory sessions are
+    # always excluded.
     if (
         allow_background_extraction
         and not incognito
@@ -1299,7 +1303,7 @@ def run_post_response_tasks(
         and not no_memory
         and uprefs.get("memory_enabled", True)
         and uprefs.get("auto_memory", True)
-        and uprefs.get("auto_experience", False)
+        and uprefs.get("auto_experience", get_setting("auto_experience", True))
     ):
         from services.memory.experience_recorder import record_experiences
         _extraction_jobs.append(("experience", record_experiences(
@@ -1308,8 +1312,8 @@ def run_post_response_tasks(
         )))
 
     # Functional emotional state is updated only from persisted, owner-scoped
-    # Slice 1 evidence, after the recorder has run. It is opt-in and never
-    # runs for private/compare/no-memory turns.
+    # Slice 1 evidence, after the recorder has run. Opted in by default and
+    # never runs for private/compare/no-memory turns.
     if (
         allow_background_extraction
         and not incognito
@@ -1317,8 +1321,8 @@ def run_post_response_tasks(
         and not no_memory
         and uprefs.get("memory_enabled", True)
         and uprefs.get("auto_memory", True)
-        and uprefs.get("auto_experience", False)
-        and uprefs.get("emotional_state_enabled", False)
+        and uprefs.get("auto_experience", get_setting("auto_experience", True))
+        and uprefs.get("emotional_state_enabled", get_setting("emotional_state_enabled", True))
     ):
         from services.memory.emotional_state import update_emotional_state
         _extraction_jobs.append(("emotional_state", update_emotional_state(
@@ -1330,8 +1334,8 @@ def run_post_response_tasks(
     # recurring patterns and persist them as inspectable traits. Runs AFTER
     # experience recording so newly written experiences are visible.
     # Shares the same memory-privacy gates as experience recording plus the
-    # auto_reflection pref — default off while this layer is under development
-    # (opt in per user via PUT /api/prefs/auto_reflection with {"value": true}).
+    # auto_reflection pref. Opted in by default; users may opt out via
+    # PUT /api/prefs/auto_reflection with {"value": false}.
     if (
         allow_background_extraction
         and not incognito
@@ -1339,7 +1343,7 @@ def run_post_response_tasks(
         and not no_memory
         and uprefs.get("memory_enabled", True)
         and uprefs.get("auto_memory", True)
-        and uprefs.get("auto_reflection", False)
+        and uprefs.get("auto_reflection", get_setting("auto_reflection", True))
     ):
         from services.memory.experience_reflection import reflect_on_experiences
         _extraction_jobs.append(("reflection", reflect_on_experiences(
@@ -1409,7 +1413,13 @@ def run_post_response_tasks(
             )))
 
     if _extraction_jobs:
+        logger.debug(
+            "[bg-extract] session %s queued jobs: %s",
+            session_id, ", ".join(name for name, _ in _extraction_jobs),
+        )
         _spawn_bg(_run_extraction_jobs_sequentially(session_id, _extraction_jobs))
+    else:
+        logger.debug("[bg-extract] session %s no background jobs queued", session_id)
 
     # Token accumulation
     if last_metrics:

@@ -495,6 +495,26 @@ def _stub_job_modules(monkeypatch):
     refl_mod.reflect_on_experiences = fake_reflect_on_experiences
     monkeypatch.setitem(sys.modules, "services.memory.experience_reflection", refl_mod)
 
+    aff_mod = types.ModuleType("services.memory.affective_state")
+
+    async def fake_record_assistant_outcome(*a, **k):
+        return True
+
+    async def fake_record_user_emotion(*a, **k):
+        return True
+
+    aff_mod.record_assistant_outcome = fake_record_assistant_outcome
+    aff_mod.record_user_emotion = fake_record_user_emotion
+    monkeypatch.setitem(sys.modules, "services.memory.affective_state", aff_mod)
+
+    emo_mod = types.ModuleType("services.memory.emotional_state")
+
+    async def fake_update_emotional_state(*a, **k):
+        return True
+
+    emo_mod.update_emotional_state = fake_update_emotional_state
+    monkeypatch.setitem(sys.modules, "services.memory.emotional_state", emo_mod)
+
     te_mod = types.ModuleType("src.task_endpoint")
     te_mod.resolve_task_endpoint = (
         lambda url, model, headers, owner=None: (url, model, headers)
@@ -548,24 +568,34 @@ def _wiring_env(monkeypatch):
     return chat_helpers, captured
 
 
-def test_experience_job_is_off_by_default(monkeypatch):
-    """Backward-compatibility pin: without the auto_experience pref the job
-    list must stay exactly ["memory", "skill"] — the list already pinned by
-    test_kv_cache_invalidation_2927."""
+def test_learning_jobs_register_by_default(monkeypatch):
+    """Learning prefs default to True, so the feedback, response-guidance,
+    outcome-recording, and reflection jobs register automatically alongside
+    memory and skill. Experience stays ahead of the LLM extraction jobs."""
     chat_helpers, captured = _wiring_env(monkeypatch)
     _run_post(chat_helpers, {"auto_memory": True, "auto_skills": True})
-    assert captured["names"] == ["memory", "skill"]
-    assert "experience" not in captured["names"]
+    names = captured["names"]
+    for job in ("assistant_affect", "user_affect", "experience",
+                "emotional_state", "reflection", "memory", "skill"):
+        assert job in names, f"{job} missing from {names}"
+    # Experience is queued before the LLM extraction jobs so a slow
+    # extraction/audit cannot delay or starve it.
+    assert names.index("experience") < names.index("memory")
+    assert names.index("experience") < names.index("skill")
 
 
-def test_experience_job_opt_in_registers_deterministic_job_first(monkeypatch):
-    """Opted in, the LLM-free deterministic job is queued BEFORE the LLM
-    extraction, so a slow extraction/audit can never delay or starve it."""
+def test_experience_job_registers_before_llm_jobs(monkeypatch):
+    """The experience job is queued before the LLM extraction jobs, even when
+    all learning defaults are on, so a slow extraction/audit cannot delay or
+    starve it."""
     chat_helpers, captured = _wiring_env(monkeypatch)
     _run_post(chat_helpers, {
         "auto_memory": True, "auto_skills": True, "auto_experience": True,
     })
-    assert captured["names"] == ["experience", "memory", "skill"]
+    names = captured["names"]
+    assert "experience" in names
+    assert names.index("experience") < names.index("memory")
+    assert names.index("experience") < names.index("skill")
     assert captured["session_id"] == "sess-Y"
 
 
@@ -581,7 +611,7 @@ def test_experience_job_opt_in_registers_deterministic_job_first(monkeypatch):
          []),
         ({"allow_background_extraction": False},
          {"auto_memory": True, "auto_skills": True, "auto_experience": True},
-         []),
+         ["assistant_affect", "user_affect"]),
         ({"allow_background_extraction": True},
          {"auto_memory": True, "auto_skills": True, "auto_experience": True,
           "memory_enabled": False},
@@ -1062,7 +1092,12 @@ def test_experience_job_passes_owner_and_session_id(monkeypatch):
         extract_skills=True,
     )
 
-    assert captured["names"] == ["experience", "memory", "skill"]
+    assert "experience" in captured["names"]
+    assert "memory" in captured["names"]
+    assert "skill" in captured["names"]
+    # Experience is queued before the LLM extraction jobs.
+    assert captured["names"].index("experience") < captured["names"].index("memory")
+    assert captured["names"].index("experience") < captured["names"].index("skill")
     assert captured["owner"] == "wiring-owner"
     assert captured["session_id"] == "sess-wiring"
 
@@ -1319,12 +1354,13 @@ def test_reflection_unreadable_store_returns_zero(tmp_path, monkeypatch):
 
 # ── Wiring: privacy gates and default-off ────────────────────────────────────
 
-def test_reflection_job_off_by_default(monkeypatch):
-    """Without auto_reflection, the job list must stay unchanged."""
+def test_reflection_job_registers_by_default(monkeypatch):
+    """auto_reflection defaults to True, so the reflection job registers
+    automatically after experience."""
     chat_helpers = _install_chat_helpers(monkeypatch)
     _stub_job_modules(monkeypatch)
-    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
-    captured = _capture_jobs(monkeypatch, chat_helpers)
+
+    captured = {"names": []}
 
     def fake_runner(session_id, jobs):
         captured["names"] = [name for name, _ in jobs]
@@ -1334,6 +1370,7 @@ def test_reflection_job_off_by_default(monkeypatch):
 
     monkeypatch.setattr(chat_helpers, "_run_extraction_jobs_sequentially", fake_runner)
     monkeypatch.setattr(chat_helpers, "_spawn_bg", lambda coro: None)
+    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
 
     sess = SimpleNamespace(
         endpoint_url="http://localhost:1234/v1",
@@ -1353,17 +1390,19 @@ def test_reflection_job_off_by_default(monkeypatch):
         extract_skills=True,
     )
 
-    # No auto_reflection → reflection not registered
-    assert "reflection" not in captured["names"]
-    assert captured["names"] == ["experience", "memory", "skill"]
+    assert "reflection" in captured["names"]
+    # Reflection comes after experience (depends on experiences being recorded)
+    exp_idx = captured["names"].index("experience")
+    refl_idx = captured["names"].index("reflection")
+    assert exp_idx < refl_idx
 
 
 def test_reflection_job_registered_when_opted_in(monkeypatch):
-    """With auto_reflection=True, the reflection job is queued after experience."""
+    """With auto_reflection=True, reflection is queued after experience."""
     chat_helpers = _install_chat_helpers(monkeypatch)
     _stub_job_modules(monkeypatch)
-    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
-    captured = _capture_jobs(monkeypatch, chat_helpers)
+
+    captured = {"names": []}
 
     def fake_runner(session_id, jobs):
         captured["names"] = [name for name, _ in jobs]
@@ -1373,6 +1412,7 @@ def test_reflection_job_registered_when_opted_in(monkeypatch):
 
     monkeypatch.setattr(chat_helpers, "_run_extraction_jobs_sequentially", fake_runner)
     monkeypatch.setattr(chat_helpers, "_spawn_bg", lambda coro: None)
+    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
 
     sess = SimpleNamespace(
         endpoint_url="http://localhost:1234/v1",
@@ -1394,7 +1434,6 @@ def test_reflection_job_registered_when_opted_in(monkeypatch):
     )
 
     assert "reflection" in captured["names"]
-    # Reflection comes after experience (depends on experiences being recorded)
     exp_idx = captured["names"].index("experience")
     refl_idx = captured["names"].index("reflection")
     assert refl_idx > exp_idx
@@ -1431,7 +1470,7 @@ def test_reflection_privacy_gates_suppress_registration(
     test_cases = [
         ({"incognito": True}, []),
         ({"compare_mode": True}, []),
-        ({"allow_background_extraction": False}, []),
+        ({"allow_background_extraction": False}, ["assistant_affect", "user_affect"]),
     ]
 
     for kwargs, expected in test_cases:

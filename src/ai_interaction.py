@@ -377,7 +377,7 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
             if len(text) > 150:
                 text = text[:150] + "..."
             result_lines.append(f"- [{cat}] `{mid}` — {text}")
-        return {"results": "\n".join(result_lines)}
+        return {"results": "\n".join(result_lines), "exit_code": 0}
 
     elif action == "add":
         if len(lines) < 2:
@@ -414,7 +414,7 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
             logger.debug("memory_added event dispatch failed", exc_info=True)
 
         return {"action": "add", "memory_id": entry["id"],
-                "results": f"Memory added: [{category}] {text}"}
+                "results": f"Memory added: [{category}] {text}", "exit_code": 0}
 
     elif action == "edit":
         if len(lines) < 3:
@@ -448,7 +448,7 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
                 pass
 
         return {"action": "edit", "memory_id": memory_id,
-                "results": f"Memory updated: {new_text}"}
+                "results": f"Memory updated: {new_text}", "exit_code": 0}
 
     elif action == "delete":
         if len(lines) < 2:
@@ -480,7 +480,7 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
                 pass
 
         return {"action": "delete", "memory_id": memory_id,
-                "results": f"Memory '{memory_id}' deleted"}
+                "results": f"Memory '{memory_id}' deleted", "exit_code": 0}
 
     elif action == "search":
         if len(lines) < 2:
@@ -506,14 +506,14 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
                 break
 
         if not results:
-            return {"results": f"No memories found matching '{query}'."}
+            return {"results": f"No memories found matching '{query}'.", "exit_code": 0}
         result_lines = [f"Found {len(results)} matching memories:\n"]
         for m in results:
             cat = m.get("category", "fact")
             mid = m.get("id", "?")[:8]
             text = m.get("text", "")
             result_lines.append(f"- [{cat}] `{mid}` — {text}")
-        return {"results": "\n".join(result_lines)}
+        return {"results": "\n".join(result_lines), "exit_code": 0}
 
     else:
         return {"error": f"Unknown action '{action}'. Use: list, add, edit, delete, search"}

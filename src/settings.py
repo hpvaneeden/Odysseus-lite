@@ -169,6 +169,15 @@ DEFAULT_SETTINGS = {
     # Max relevant skills injected into the prompt for one request. The skills
     # library can grow beyond this; cleanup/retirement is an explicit review flow.
     "skill_max_injected": 3,
+    # Autonomous learning / interaction feedback (Slice 1-3). When True, the
+    # feedback, response-guidance, outcome-recording, and reflection loop runs
+    # automatically in normal conversations. Incognito, compare, and
+    # no-memory sessions remain excluded regardless of these prefs.
+    "auto_experience": True,
+    "emotional_state_enabled": True,
+    "assistant_emotions_enabled": True,
+    "user_emotion_recording_enabled": True,
+    "auto_reflection": True,
     # Reminders
     "reminder_channel": "browser",   # "browser" | "email" | "ntfy" | "webhook"
     "reminder_llm_synthesis": False,

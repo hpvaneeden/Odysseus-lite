@@ -298,6 +298,22 @@ async def test_run_post_response_tasks_does_not_fire_extraction_concurrently(mon
     skill_extractor_mod.maybe_extract_skill = fake_maybe_extract_skill
     monkeypatch.setitem(sys.modules, "services.memory.skill_extractor", skill_extractor_mod)
 
+    # Learning jobs now register by default; stub them so the KV-cache test
+    # (which only tracks memory/skill extractor calls) is not affected.
+    for _mod_name, _attrs in (
+        ("services.memory.experience_recorder", {"record_experiences": lambda *a, **k: None}),
+        ("services.memory.emotional_state", {"update_emotional_state": lambda *a, **k: None}),
+        ("services.memory.affective_state", {
+            "record_assistant_outcome": lambda *a, **k: None,
+            "record_user_emotion": lambda *a, **k: None,
+        }),
+        ("services.memory.experience_reflection", {"reflect_on_experiences": lambda *a, **k: None}),
+    ):
+        _mod = types.ModuleType(_mod_name)
+        for _attr_name, _attr in _attrs.items():
+            setattr(_mod, _attr_name, _attr)
+        monkeypatch.setitem(sys.modules, _mod_name, _mod)
+
     task_endpoint_mod = types.ModuleType("src.task_endpoint")
     task_endpoint_mod.resolve_task_endpoint = lambda url, model, headers, owner=None: (url, model, headers)
     monkeypatch.setitem(sys.modules, "src.task_endpoint", task_endpoint_mod)
@@ -336,7 +352,12 @@ async def test_run_post_response_tasks_does_not_fire_extraction_concurrently(mon
     # Both extractors were queued through the sequential gate — not fired
     # directly via asyncio.create_task — and both ultimately ran exactly once.
     assert captured_jobs.get("session_id") == "sess-Y"
-    assert captured_jobs.get("names") == ["memory", "skill"]
+    names = captured_jobs.get("names", [])
+    assert "memory" in names
+    assert "skill" in names
+    # Learning jobs now register by default alongside memory/skill.
+    assert "experience" in names
+    assert "reflection" in names
     assert calls == {"memory": 1, "skill": 1}
 
 

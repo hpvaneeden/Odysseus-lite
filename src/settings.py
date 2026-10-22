@@ -177,6 +177,16 @@ DEFAULT_SETTINGS = {
     "emotional_state_enabled": True,
     "assistant_emotions_enabled": True,
     "user_emotion_recording_enabled": True,
+    # Self-definition (Odysseus's optional self-model / identity). The master
+    # switch `self_definition_enabled` gates the two subordinate switches: with
+    # the master off, autonomous naming and personality development are treated
+    # as disabled regardless of their persisted values. Toggling the master
+    # off never deletes any self-definition data written while it was on —
+    # values survive disable/re-enable cycles. All three default OFF so the
+    # capability is opt-in and inert by default.
+    "self_definition_enabled": False,
+    "autonomous_naming_enabled": False,
+    "personality_development_enabled": False,
     "auto_reflection": True,
     # Reminders
     "reminder_channel": "browser",   # "browser" | "email" | "ntfy" | "webhook"
@@ -266,6 +276,37 @@ def save_settings(settings: dict):
 def get_setting(key: str, default: Any = None) -> Any:
     """Read a single setting value."""
     return load_settings().get(key, default)
+
+
+# ── Self-definition capability gates ──────────────────────────────────────
+#
+# Master-switch semantics: `self_definition_enabled` is the master switch for
+# Odysseus's optional self-definition features. Each subordinate gate returns
+# True only when the master switch AND its own flag are on, so the subordinate
+# flags can be pre-flipped (and will survive a later master re-enable) without
+# taking effect until the master is on as well. Nothing is ever deleted by a
+# toggle — data written while enabled persists across disable/re-enable.
+
+
+def self_definition_enabled() -> bool:
+    """Master switch for Odysseus's optional self-definition features."""
+    return bool(get_setting("self_definition_enabled", False))
+
+
+def autonomous_naming_enabled() -> bool:
+    """Autonomous self-naming: on only when the self-definition master switch
+    and this subordinate switch are both on."""
+    return self_definition_enabled() and bool(
+        get_setting("autonomous_naming_enabled", False)
+    )
+
+
+def personality_development_enabled() -> bool:
+    """Personality development: on only when the self-definition master switch
+    and this subordinate switch are both on."""
+    return self_definition_enabled() and bool(
+        get_setting("personality_development_enabled", False)
+    )
 
 
 def is_setting_overridden(key: str) -> bool:

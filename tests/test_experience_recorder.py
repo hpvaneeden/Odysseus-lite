@@ -77,6 +77,7 @@ _REJECTED = [
     ("", "empty"),
     ("ok", "bare ack"),
     ("thanks", "pleasantry"),
+    ("thank you", "plain pleasantry"),
     ("Thanks!", "pleasantry with punctuation"),
     ("hi", "greeting"),
     ("lol", "bare laughter"),
@@ -130,6 +131,10 @@ _ACCEPTED = [
     ("Exactly what I needed.", "outcome_ack"),
     # positive feedback
     ("That's perfect!", "positive_feedback"),
+    ("That was concise and accurate. Thank you.", "positive_feedback"),
+    ("That was helpful.", "positive_feedback"),
+    ("That was accurate.", "positive_feedback"),
+    ("That was concise.", "positive_feedback"),
     ("Well done on fixing that.", "positive_feedback"),
     ("Nice job on the summary.", "positive_feedback"),
     ("You're right about these.", "positive_feedback"),

@@ -27,7 +27,8 @@ Wiring: scheduled as a background job by
 ``routes.chat_helpers.run_post_response_tasks`` behind the same privacy gates
 as memory extraction (incognito / compare / memory_enabled / auto_memory /
 allow_background_extraction) plus the ``auto_experience`` preference, which
-defaults to off while this layer is under development.
+defaults to ``True`` and is read via the standard settings default
+(``get_setting("auto_experience", True)``).
 
 Scope: evidence recording only. Reflection, trait formation, emotional-state
 persistence, and any model-visible behaviour are later slices.
@@ -122,6 +123,9 @@ _PATTERNS = [
     ("positive_feedback", re.compile(
         r"\byou(?:'re|\s+are)\s+(?:always\s+|so\s+|just\s+)?(?:right|correct|the\s+best|a\s+genius|amazing)\b", re.I), True),
     ("positive_feedback", re.compile(r"\bi\s+(?:love(?:d)?|liked|really\s+like)\s+(?:it|this|that|your)\b", re.I), True),
+    ("positive_feedback", re.compile(
+        r"\b(?:that|this|it)(?:'s|\s+is|\s+was)\s+(?:concise|accurate|helpful)\b",
+        re.I), True),
 
     # ── Social signal: explicit humour appreciation / emotional expression ──
     # "That's funny" is deliberately NOT here — it is ambiguous (humorous vs

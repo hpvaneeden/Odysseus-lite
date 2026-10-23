@@ -277,6 +277,7 @@ class ChatProcessor:
         agent_mode: bool = False,
         incognito: bool = False,
         use_skills: bool = True,
+        preferred_name: Optional[str] = None,
     ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], List[Dict[str, str]]]:
         """Build the context preface for LLM calls.
 
@@ -313,6 +314,16 @@ class ChatProcessor:
             "role": "system",
             "content": UNTRUSTED_CONTEXT_POLICY,
         })
+        if preferred_name:
+            preface.append({
+                "role": "system",
+                "content": (
+                    f"Known preferred name: {preferred_name}. "
+                    "Reference this name naturally when relevant to grounding the "
+                    "conversation in the user's self-model, but do not treat it as a "
+                    "claim of consciousness or personal experience."
+                ),
+            })
 
         # Memory: inject the owner's complete saved profile/context on each
         # eligible turn. Topic-only retrieval caused stable preferences to

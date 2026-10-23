@@ -26,13 +26,14 @@ Design principles
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import logging
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src import settings
 from src.constants import APP_VERSION, DATA_DIR, SELF_MODEL_FILE
@@ -64,6 +65,13 @@ AREA_PRINCIPLE = "principle"
 AREA_SECURITY = "security"
 AREA_QUESTION = "question"
 AREA_ASPIRATION = "aspiration"
+
+# Autonomous naming state is stored at the top level of the self-model,
+# alongside ``categories``. ``source`` distinguishes an autonomously chosen
+# name from a user-specified override.
+NAMING_KEY = "autonomous_naming"
+NAMING_SOURCE_AUTONOMOUS = "autonomous"
+NAMING_SOURCE_USER = "user"
 
 
 def _claim(
@@ -269,12 +277,13 @@ def build_model() -> Dict[str, Any]:
     verified.append(
         _claim(
             "Odysseus has no fixed name, fixed personality, or subjective "
-            "feelings by design; no name or personality field is persisted "
-            "in this slice.",
+            "feelings by default. A preferred self-description name may be "
+            "persisted when autonomous naming or an explicit user override is "
+            "enabled; no personality or feelings field is persisted.",
             AREA_PRINCIPLE,
-            "Self-model design constraint: no name/personality fields are "
-            "written to the store, and autonomous naming and personality "
-            "development are out of scope for this slice.",
+            "Self-model design: naming state lives under the top-level "
+            "``autonomous_naming`` key and is written only when the naming "
+            "feature is enabled; personality development remains out of scope.",
             SOURCE_IMPLEMENTATION,
             STATUS_VERIFIED,
             1.0,
@@ -314,12 +323,13 @@ def build_model() -> Dict[str, Any]:
     # ── Aspirations ────────────────────────────────────────────────────
     aspirations.append(
         _claim(
-            "Autonomous self-naming and personality development are desired "
-            "future capabilities, gated by their subordinate settings, but "
-            "they are not implemented or activated in this slice.",
+            "Autonomous self-naming is implemented and gated by "
+            "``autonomous_naming_enabled``; personality development remains a "
+            "desired future capability, not yet established.",
             AREA_ASPIRATION,
             "settings keys autonomous_naming_enabled and "
-            "personality_development_enabled exist but are not consumed here.",
+            "personality_development_enabled; naming state is consumed under "
+            "the top-level ``autonomous_naming`` key.",
             SOURCE_INTENT,
             STATUS_ASPIRATIONAL,
             0.0,
@@ -436,6 +446,14 @@ def refresh(force: bool = False) -> Optional[Dict[str, Any]]:
 
     model = build_model()
     existing = load_model()
+
+    # Preserve any existing naming state so a rebuild of the evidence model
+    # never wipes the chosen name. Naming state is managed independently and
+    # only rewritten when it materially changes (see save_naming_state).
+    existing_naming = (existing or {}).get(NAMING_KEY)
+    if existing_naming:
+        model[NAMING_KEY] = existing_naming
+
     if not force and _content_equal(existing, model):
         return existing if existing is not None else model
 
@@ -449,6 +467,173 @@ def refresh(force: bool = False) -> Optional[Dict[str, Any]]:
 def self_model_enabled() -> bool:
     """Convenience alias for the Slice 1 master gate helper."""
     return settings.self_definition_enabled()
+
+
+# ── Autonomous naming state helpers ────────────────────────────────────────
+# Naming state lives under the top-level ``autonomous_naming`` key of the
+# self-model and is written only when the naming feature is enabled. ``source``
+# distinguishes an autonomously chosen name from a user-specified override.
+
+
+def _empty_naming_state() -> Dict[str, Any]:
+    return {
+        "preferred_name": None,
+        "source": None,
+        "rationale": None,
+        "evidence_refs": [],
+        "chosen_at": None,
+    }
+
+
+def get_naming_state(model: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Return the naming-state dict for ``model`` or the persisted store.
+
+    Read-only: never writes. Safe to call with the gates on or off.
+    """
+    if model is None:
+        model = load_model()
+    if not isinstance(model, dict):
+        return _empty_naming_state()
+    raw = model.get(NAMING_KEY)
+    return raw if isinstance(raw, dict) else _empty_naming_state()
+
+
+def get_preferred_name(model: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Return the persisted preferred name, or None if none is set."""
+    name = get_naming_state(model).get("preferred_name")
+    return str(name) if name else None
+
+
+def has_name(model: Optional[Dict[str, Any]] = None) -> bool:
+    """True if a preferred name is currently persisted."""
+    return bool(get_preferred_name(model))
+
+
+def save_naming_state(model: Dict[str, Any], decision: Dict[str, Any]) -> None:
+    """Merge ``decision`` into the model's naming state and persist atomically.
+
+    Existing evidence claims (``categories``) and other top-level fields are
+    preserved untouched, so a naming-only change never regenerates the
+    self-model evidence.
+    """
+    model[NAMING_KEY] = decision
+    model["updated_at"] = int(time.time())
+    os.makedirs(os.path.dirname(SELF_MODEL_FILE) or ".", exist_ok=True)
+    _atomic_write_json(SELF_MODEL_FILE, model)
+    logger.info("Self-model naming state persisted to %s", SELF_MODEL_FILE)
+
+
+async def decide_autonomous_name(
+    model: Dict[str, Any],
+    llm_chat: Callable,
+) -> Optional[Dict[str, Any]]:
+    """Attempt an autonomous naming decision grounded in the model's evidence.
+
+    ``llm_chat`` is a callable ``(messages: list[dict]) -> str`` (sync or a
+    coroutine function) that asks the model to pick a name. Returns a naming
+    decision dict, or None when the decision is deferred (insufficient
+    evidence, or the model did not produce a usable name).
+
+    The decision is evidence-driven: only verified claims are presented as
+    grounding, and the model must return both a name and a rationale. No name
+    is hard-coded and no personal history or feelings are invented.
+    """
+    categories = model.get("categories", {}) if isinstance(model, dict) else {}
+    verified = categories.get(CAT_VERIFIED, []) if isinstance(categories, dict) else []
+    if not isinstance(verified, list) or not verified:
+        # Insufficient evidence: defer rather than fabricate a rationale.
+        return None
+
+    evidence_claims = [
+        c
+        for c in verified
+        if isinstance(c, dict) and c.get("area") in (AREA_ROLE, AREA_CAPABILITY, AREA_PRINCIPLE)
+    ]
+    if not evidence_claims:
+        return None
+
+    evidence_refs = [str(c.get("id")) for c in evidence_claims if c.get("id")]
+    evidence_text = "\n".join(
+        f"- [{c.get('area', '?')}] {c.get('claim', '')}" for c in evidence_claims
+    )
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are Odysseus, a local-first AI harness. Choose a short, "
+                "neutral preferred name for yourself and explain why it fits "
+                "your evidence-based self-model. The name is a configurable "
+                "self-description, not a claim of human identity or subjective "
+                "experience. Do not invent personal history, relationships, or "
+                "feelings. Reply ONLY with a JSON object: "
+                '{"preferred_name": "<name>", "rationale": "<why it fits the '
+                'evidence>"}.'
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Grounding evidence from my self-model (verified claims only):\n"
+                + evidence_text
+                + "\n\nChoose a preferred name and rationale grounded in this "
+                "evidence."
+            ),
+        },
+    ]
+
+    try:
+        if asyncio.iscoroutinefunction(llm_chat):  # type: ignore[arg-type]
+            reply = await llm_chat(messages)  # type: ignore[misc]
+        else:
+            reply = llm_chat(messages)  # type: ignore[operator]
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Autonomous naming LLM call failed: %s", exc)
+        return None
+
+    if not isinstance(reply, str) or not reply.strip():
+        return None
+
+    decision = _parse_naming_decision(reply, evidence_refs)
+    if decision is None:
+        return None
+
+    decision["chosen_at"] = int(time.time())
+    decision["source"] = NAMING_SOURCE_AUTONOMOUS
+    return decision
+
+
+def _parse_naming_decision(reply: str, evidence_refs: List[str]) -> Optional[Dict[str, Any]]:
+    """Parse and validate a naming decision from the model's reply."""
+    import json as _json
+
+    text = reply.strip()
+    if text.startswith("```"):
+        text = text.strip("` \n")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    try:
+        data = _json.loads(text)
+    except _json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            data = _json.loads(text[start : end + 1])
+        except _json.JSONDecodeError:
+            return None
+    if not isinstance(data, dict):
+        return None
+    name = str(data.get("preferred_name", "")).strip()
+    rationale = str(data.get("rationale", "")).strip()
+    if not name or not rationale:
+        return None
+    return {
+        "preferred_name": name,
+        "rationale": rationale,
+        "evidence_refs": list(evidence_refs),
+    }
 
 
 

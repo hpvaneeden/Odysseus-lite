@@ -19,7 +19,12 @@ from src.model_context import estimate_tokens, get_context_length
 from src.auth_helpers import effective_user
 from src.prompt_security import untrusted_context_message
 from src.attachment_refs import attachment_ref
-from src.settings import get_setting
+from src.settings import (
+    get_setting,
+    self_definition_enabled,
+    autonomous_naming_enabled,
+)
+import src.self_model as sm
 from odysseus_extensions.social_skill import (
     compact_social_history,
     is_explicit_request,
@@ -750,6 +755,7 @@ async def build_chat_context(
         agent_mode=agent_mode,
         incognito=incognito,
         use_skills=skills_enabled,
+        preferred_name=sm.get_preferred_name(model),
     )
     if use_rag is not None or is_research_spinoff or casual_low_signal:
         _preface_kwargs["use_rag"] = use_rag_val

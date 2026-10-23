@@ -187,6 +187,13 @@ DEFAULT_SETTINGS = {
     "self_definition_enabled": False,
     "autonomous_naming_enabled": False,
     "personality_development_enabled": False,
+    # User-specified override of Odysseus's preferred name. When non-empty this
+    # takes precedence over any autonomously chosen name. It changes only
+    # Odysseus's preferred self-description -- never the caller's account
+    # identity or authentication details. The naming feature (autonomous or
+    # override) only takes effect when both self_definition_enabled and
+    # autonomous_naming_enabled are on.
+    "odysseus_preferred_name": "",
     "auto_reflection": True,
     # Reminders
     "reminder_channel": "browser",   # "browser" | "email" | "ntfy" | "webhook"

@@ -37,6 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src import settings
 from src.constants import APP_VERSION, DATA_DIR, SELF_MODEL_FILE
+from src.observability import TurnTrace, make_naming_event_entry, make_self_def_event_entry, write_naming_event, write_self_def_event
 
 logger = logging.getLogger(__name__)
 
@@ -441,7 +442,21 @@ def refresh(force: bool = False) -> Optional[Dict[str, Any]]:
     written only if it materially differs from what is persisted (or when
     force=True). Existing data is never deleted by a disable/re-enable cycle.
     """
+    _corr = str(uuid.uuid4())
     if not settings.self_definition_enabled():
+        write_self_def_event(
+            make_self_def_event_entry(
+                event_type_name="refresh",
+                gate_permitted=False,
+                action_taken=False,
+                outcome="gated_off",
+                evidence_ref=None,
+                source="harness",
+                session_id="self_model",
+                turn_id="self_model",
+                correlation_id=_corr,
+            )
+        )
         return None
 
     model = build_model()
@@ -455,12 +470,38 @@ def refresh(force: bool = False) -> Optional[Dict[str, Any]]:
         model[NAMING_KEY] = existing_naming
 
     if not force and _content_equal(existing, model):
+        write_self_def_event(
+            make_self_def_event_entry(
+                event_type_name="refresh",
+                gate_permitted=True,
+                action_taken=False,
+                outcome="no_change",
+                evidence_ref=None,
+                source="harness",
+                session_id="self_model",
+                turn_id="self_model",
+                correlation_id=_corr,
+            )
+        )
         return existing if existing is not None else model
 
     model["updated_at"] = int(time.time())
     os.makedirs(os.path.dirname(SELF_MODEL_FILE) or ".", exist_ok=True)
     _atomic_write_json(SELF_MODEL_FILE, model)
     logger.info("Self-model refreshed and persisted to %s", SELF_MODEL_FILE)
+    write_self_def_event(
+        make_self_def_event_entry(
+            event_type_name="refresh",
+            gate_permitted=True,
+            action_taken=True,
+            outcome="refreshed",
+            evidence_ref=None,
+            source="harness",
+            session_id="self_model",
+            turn_id="self_model",
+            correlation_id=_corr,
+        )
+    )
     return model
 
 
@@ -521,6 +562,23 @@ def save_naming_state(model: Dict[str, Any], decision: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(SELF_MODEL_FILE) or ".", exist_ok=True)
     _atomic_write_json(SELF_MODEL_FILE, model)
     logger.info("Self-model naming state persisted to %s", SELF_MODEL_FILE)
+    _source = decision.get("source", NAMING_SOURCE_AUTONOMOUS)
+    write_naming_event(
+        make_naming_event_entry(
+            gate_permitted=bool(settings.autonomous_naming_enabled()),
+            decision_attempted=True,
+            name_selected=decision.get("preferred_name"),
+            decision_deferred=False,
+            existing_name_preserved=False,
+            user_override=(_source == NAMING_SOURCE_USER),
+            persistence_outcome="saved",
+            evidence_ref=",".join(decision.get("evidence_refs", [])) or None,
+            source=_source,
+            session_id="self_model",
+            turn_id="self_model",
+            correlation_id=str(uuid.uuid4()),
+        )
+    )
 
 
 async def decide_autonomous_name(
@@ -538,10 +596,40 @@ async def decide_autonomous_name(
     grounding, and the model must return both a name and a rationale. No name
     is hard-coded and no personal history or feelings are invented.
     """
+    _corr = str(uuid.uuid4())
+    gate_permitted = bool(settings.autonomous_naming_enabled())
+    if not gate_permitted:
+        write_naming_event(
+            make_naming_event_entry(
+                gate_permitted=False,
+                decision_attempted=False,
+                decision_deferred=True,
+                persistence_outcome="not_attempted",
+                source="autonomous",
+                session_id="self_model",
+                turn_id="self_model",
+                correlation_id=_corr,
+            )
+        )
+        return None
+
     categories = model.get("categories", {}) if isinstance(model, dict) else {}
     verified = categories.get(CAT_VERIFIED, []) if isinstance(categories, dict) else []
     if not isinstance(verified, list) or not verified:
         # Insufficient evidence: defer rather than fabricate a rationale.
+        write_naming_event(
+            make_naming_event_entry(
+                gate_permitted=True,
+                decision_attempted=False,
+                decision_deferred=True,
+                persistence_outcome="not_attempted",
+                source="autonomous",
+                evidence_ref=None,
+                session_id="self_model",
+                turn_id="self_model",
+                correlation_id=_corr,
+            )
+        )
         return None
 
     evidence_claims = [
@@ -550,6 +638,19 @@ async def decide_autonomous_name(
         if isinstance(c, dict) and c.get("area") in (AREA_ROLE, AREA_CAPABILITY, AREA_PRINCIPLE)
     ]
     if not evidence_claims:
+        write_naming_event(
+            make_naming_event_entry(
+                gate_permitted=True,
+                decision_attempted=False,
+                decision_deferred=True,
+                persistence_outcome="not_attempted",
+                source="autonomous",
+                evidence_ref=None,
+                session_id="self_model",
+                turn_id="self_model",
+                correlation_id=_corr,
+            )
+        )
         return None
 
     evidence_refs = [str(c.get("id")) for c in evidence_claims if c.get("id")]
@@ -589,17 +690,70 @@ async def decide_autonomous_name(
             reply = llm_chat(messages)  # type: ignore[operator]
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Autonomous naming LLM call failed: %s", exc)
+        write_naming_event(
+            make_naming_event_entry(
+                gate_permitted=True,
+                decision_attempted=True,
+                decision_deferred=True,
+                persistence_outcome="not_attempted",
+                source="autonomous",
+                evidence_ref=None,
+                session_id="self_model",
+                turn_id="self_model",
+                correlation_id=_corr,
+            )
+        )
         return None
 
     if not isinstance(reply, str) or not reply.strip():
+        write_naming_event(
+            make_naming_event_entry(
+                gate_permitted=True,
+                decision_attempted=True,
+                decision_deferred=True,
+                persistence_outcome="not_attempted",
+                source="autonomous",
+                evidence_ref=None,
+                session_id="self_model",
+                turn_id="self_model",
+                correlation_id=_corr,
+            )
+        )
         return None
 
     decision = _parse_naming_decision(reply, evidence_refs)
     if decision is None:
+        write_naming_event(
+            make_naming_event_entry(
+                gate_permitted=True,
+                decision_attempted=True,
+                decision_deferred=True,
+                persistence_outcome="not_attempted",
+                source="autonomous",
+                evidence_ref=None,
+                session_id="self_model",
+                turn_id="self_model",
+                correlation_id=_corr,
+            )
+        )
         return None
 
     decision["chosen_at"] = int(time.time())
     decision["source"] = NAMING_SOURCE_AUTONOMOUS
+    write_naming_event(
+        make_naming_event_entry(
+            gate_permitted=True,
+            decision_attempted=True,
+            name_selected=decision.get("preferred_name"),
+            decision_deferred=False,
+            persistence_outcome="not_attempted",
+            evidence_ref=",".join(decision.get("evidence_refs", [])) or None,
+            source=NAMING_SOURCE_AUTONOMOUS,
+            session_id="self_model",
+            turn_id="self_model",
+            correlation_id=_corr,
+        )
+    )
     return decision
 
 

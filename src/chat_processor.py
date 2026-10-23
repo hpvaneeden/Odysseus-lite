@@ -10,6 +10,8 @@ from src.youtube_handler import is_youtube_url
 from src.search import comprehensive_web_search, fetch_webpage_content
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
 from src.tool_policy import ODYSSEUS_DEFAULT_INTERACTION_RULES
+from src import settings
+import src.self_model as sm
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,37 @@ def _content_tokens(text: str) -> list:
     """Extract meaningful content words: no stopwords, min 3 chars, lowercase."""
     words = re.findall(r'[a-z0-9]+(?:[-_][a-z0-9]+)*', text.lower())
     return [w for w in words if len(w) >= 3 and w not in _STOPWORDS]
+
+
+def _capture_turn_state(session, preferred_name=None, memory_count=None):
+    """Capture actual available turn state without inventing missing fields.
+
+    Mood and personality are not persisted as runtime session state in this
+    codebase, so they are intentionally omitted rather than fabricated.
+    Unavailable state is distinguished from empty state by omitting the key.
+    """
+    state = {
+        "session": {
+            "id": getattr(session, "id", None),
+            "name": getattr(session, "name", None),
+            "model": getattr(session, "model", None),
+            "endpoint_url": getattr(session, "endpoint_url", None),
+            "owner": getattr(session, "owner", None),
+            "mode": getattr(session, "mode", None),
+            "rag": getattr(session, "rag", None),
+            "message_count": getattr(session, "message_count", None),
+        },
+        "preferred_name": preferred_name,
+        "naming_state": None,
+    }
+    try:
+        state["naming_state"] = sm.get_naming_state()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Could not read naming state for observability: %s", exc)
+        state["naming_state"] = {"error": str(exc)}
+    if memory_count is not None:
+        state["memory_count"] = memory_count
+    return state
 
 
 class ChatProcessor:
@@ -313,16 +346,9 @@ class ChatProcessor:
         )
 
         with TurnTrace(session_id=session_id, turn_id=turn_id) as trace:
-            # Record model input
-            trace.model_input = make_model_input_entry(
-                model_input={"message": message, "session_id": session_id},
-                session_id=session_id,
-                turn_id=turn_id,
-            )
-
-            # Record before_state snapshot
+            # Record before_state snapshot with real state (not empty {})
             trace.before_state = make_state_snapshot_entry(
-                state={},
+                state=_capture_turn_state(session, preferred_name),
                 session_id=session_id,
                 turn_id=turn_id,
                 metadata={"step": "before_processing"},
@@ -364,6 +390,14 @@ class ChatProcessor:
             self._last_used_memories = []  # track what was injected
             if use_memory:
                 mem_entries = self.memory_manager.load(owner=owner)
+                trace.record_memory(
+                    operation="load",
+                    actor="harness",
+                    outcome="success" if mem_entries else "empty",
+                    reason=None if mem_entries else "No memories returned for owner",
+                    before={"owner": owner},
+                    after={"count": len(mem_entries), "owner": owner},
+                )
 
                 ordered_memories = sorted(
                     [
@@ -406,8 +440,22 @@ class ChatProcessor:
                 if _used_ids and hasattr(self.memory_manager, "increment_uses"):
                     try:
                         self.memory_manager.increment_uses(_used_ids)
+                        trace.record_memory(
+                            operation="increment_uses",
+                            actor="harness",
+                            outcome="success",
+                            before={"ids": _used_ids},
+                            after={"count": len(_used_ids)},
+                        )
                     except Exception as _e:
                         logger.warning("Failed to increment memory uses: %s", _e)
+                        trace.record_memory(
+                            operation="increment_uses",
+                            actor="harness",
+                            outcome="failure",
+                            reason=str(_e),
+                            before={"ids": _used_ids},
+                        )
 
                 # (skills index injection moved out — see below; only fires in
                 # agent mode so chat mode and incognito stay clean.)
@@ -418,6 +466,14 @@ class ChatProcessor:
                     rag_manager = getattr(self.personal_docs_manager, 'rag_manager', None)
                     if rag_manager:
                         results = rag_manager.search(message, k=5, owner=owner)
+                        trace.record_memory(
+                            operation="search",
+                            actor="harness",
+                            outcome="success" if results else "empty",
+                            reason=None if results else "No RAG results returned",
+                            before={"query": message, "k": 5, "owner": owner},
+                            after={"count": len(results), "owner": owner},
+                        )
                         # Filter by similarity threshold
                         relevant = [r for r in results if r.get("similarity", 0) >= self.RAG_SIMILARITY_THRESHOLD]
                         if relevant:
@@ -574,10 +630,41 @@ class ChatProcessor:
                         "\n".join(lines),
                     ))
 
+            # Record model input — captured after full preface assembly so the
+            # log reflects the exact messages and parameters that will be sent
+            # to the model. The preface is labelled as intermediate context;
+            # further prompt construction (history merge, compaction, trimming)
+            # occurs later in build_chat_context.
+            try:
+                from src.tool_schemas import FUNCTION_TOOL_SCHEMAS  # lazy; may fail in minimal envs
+                _tool_schemas = FUNCTION_TOOL_SCHEMAS
+            except Exception:
+                _tool_schemas = []
+                logger.debug("Tool schemas unavailable for observability trace")
 
-            # Record after_state snapshot
+            trace.model_input = make_model_input_entry(
+                model_input={
+                    "message": message,
+                    "session_id": session_id,
+                    "preface": preface,
+                    "preferred_name": preferred_name,
+                    "stage": "preface_assembled",
+                },
+                session_id=session_id,
+                turn_id=turn_id,
+                model=getattr(session, "model", None),
+                endpoint=getattr(session, "endpoint_url", None),
+                generation_params={},
+                tool_schemas=_tool_schemas,
+            )
+
+            # Record after_state snapshot with real state after processing
             trace.after_state = make_state_snapshot_entry(
-                state={},
+                state=_capture_turn_state(
+                    session,
+                    preferred_name,
+                    memory_count=len(getattr(self, "_last_used_memories", [])),
+                ),
                 session_id=session_id,
                 turn_id=turn_id,
                 metadata={"step": "after_processing"},
